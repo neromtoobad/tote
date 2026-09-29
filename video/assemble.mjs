@@ -1,6 +1,9 @@
 // Stitch the demo video: intro scene → recorded shift → tech scene → outro.
-//   node assemble.mjs <tape> [--demo-from s] [--demo-to s] [--cut a-b ...]
-// Narration clips are placed at fixed offsets inside each scene.
+//   node assemble.mjs <tape> [--demo-from s] [--demo-to s] [--cut a-b ...] [--over part:line@s ...]
+// Narration clips are placed at fixed offsets inside each scene; --over lays a
+// narration line over a kept part of the shift (e.g. --over 5:6@0.5); --zoom
+// eases a kept part into a close-up (--zoom 5:2.4-4.0:960,790,1.7 = part 5,
+// from 2.4 s to 4.0 s, centred on x 960 y 790, 1.7x).
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -16,6 +19,16 @@ const arg = (k, d) => {
   return i >= 0 ? args[i + 1] : d
 }
 const cuts = args.flatMap((a, i) => (a === '--cut' ? [args[i + 1].split('-').map(Number)] : []))
+const overs = args.flatMap((a, i) => (a === '--over' ? [args[i + 1].match(/^(\d+):(\d+)@([\d.]+)$/).slice(1).map(Number)] : []))
+const zooms = args.flatMap((a, i) => (a === '--zoom' ? [args[i + 1].match(/^(\d+):([\d.]+)-([\d.]+):(\d+),(\d+),([\d.]+)$/).slice(1).map(Number)] : []))
+// Ease into a close-up around (cx, cy). zoompan on a 2x upscale keeps the
+// push-in smooth; crop can't follow a frame size that changes per frame.
+function zoomFilter([, a, b, cx, cy, z]) {
+  const p = `if(lt(it,${a}),0,if(gt(it,${b}),1,pow((it-${a})/${b - a},2)*(3-2*(it-${a})/${b - a})))`
+  const x = `min(max(0,${cx * 2}-iw/zoom/2),iw-iw/zoom)`
+  const y = `min(max(0,${cy * 2}-ih/zoom/2),ih-ih/zoom)`
+  return `scale=3840:2160,zoompan=z='1+${z - 1}*${p}':x='${x}':y='${y}':d=1:s=1920x1080:fps=30`
+}
 const NARR = process.env.NARR ?? 'narration2'
 const N = (i) => path.join(here, NARR, `n${i}.wav`)
 const ff = (...a) => execFileSync(FF, ['-y', '-loglevel', 'error', ...a], { stdio: 'inherit' })
@@ -60,7 +73,17 @@ function demo() {
   const parts = keep.map(([s, e], k) => {
     const f = path.join(out, `demo-part-${k}.mp4`)
     const d = e - s
-    ff('-ss', String(s), '-t', String(d), '-i', src, '-vf', `fade=t=in:d=${k ? 0.2 : FADE},fade=t=out:st=${d - (k === keep.length - 1 ? FADE : 0.2)}:d=${k === keep.length - 1 ? FADE : 0.2}`, '-af', `afade=t=in:d=0.15,afade=t=out:st=${d - 0.15}:d=0.15`, ...ENC, f)
+    const zoom = zooms.find(([p]) => p === k)
+    const vf = `${zoom ? zoomFilter(zoom) + ',' : ''}fade=t=in:d=${k ? 0.2 : FADE},fade=t=out:st=${d - (k === keep.length - 1 ? FADE : 0.2)}:d=${k === keep.length - 1 ? FADE : 0.2}`
+    const af = `afade=t=in:d=0.15,afade=t=out:st=${d - 0.15}:d=0.15`
+    const over = overs.filter(([p]) => p === k)
+    if (!over.length) ff('-ss', String(s), '-t', String(d), '-i', src, '-vf', vf, '-af', af, ...ENC, f)
+    else {
+      const ins = over.flatMap(([, i]) => ['-i', N(i)])
+      const delays = over.map(([, , at], j) => `[${j + 1}:a]adelay=${Math.round(at * 1000)}|${Math.round(at * 1000)}[o${j}]`).join(';')
+      const mix = `[0:a]${over.map((_, j) => `[o${j}]`).join('')}amix=inputs=${over.length + 1}:normalize=0,atrim=0:${d},${af}[a]`
+      ff('-ss', String(s), '-t', String(d), '-i', src, ...ins, '-filter_complex', `[0:v]${vf}[v];${delays};${mix}`, '-map', '[v]', '-map', '[a]', ...ENC, '-t', String(d), f)
+    }
     return f
   })
   return parts
