@@ -1,19 +1,30 @@
 import { advanceTo, epoch, isVirtual, later, now as clockNow, onFrame } from './clock'
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { LANGS, Shift, metrics, type LangKey, type Tuning } from './sim/shift'
+import { Desk } from './sim/desk'
 import { batcher, fromBase64, openAudio, toBase64, type AudioIO } from './voice/audio'
 import { VoiceAgent, type AgentStatus, type WireEvent } from './voice/agent'
 import { FloorMap } from './ui/FloorMap'
-import { Activity, Desk, Headset, Kpis, PickList, SamStage, SlotCard, Wire, type Caption } from './ui/panels'
+import { Activity, Desk as DeskPanel, Headset, Kpis, PickList, SamStage, SlotCard, Wire, type Caption, type DeskLine } from './ui/panels'
 import { AudioLines, Globe, Hash, Mic, PackageCheck, Square, Zap } from 'lucide-react'
-import { Report, type ReportData } from './ui/Report'
+import { Report, type Analysis, type ReportData } from './ui/Report'
 
 const PHASES = ['briefing', 'travel', 'pick', 'complete'] as const
 
 type Tape = {
+  analysis?: Analysis
   tuning?: Tuning
   lang: LangKey
-  events: { t: number; msg?: Record<string, unknown>; sam?: string; len?: number }[]
+  events: {
+    t: number
+    msg?: Record<string, unknown>
+    desk?: Record<string, unknown>
+    sam?: string
+    dana?: string
+    deskOpen?: boolean
+    deskClose?: boolean
+    len?: number
+  }[]
   report?: ReportData
   tail?: number
 }
@@ -46,8 +57,16 @@ export default function App() {
   const [wire, setWire] = useState<WireEvent[]>([])
   const [report, setReport] = useState<{ open: boolean; data: ReportData | null; error: string | null }>({ open: false, data: null, error: null })
   // Replay only: what Sam is saying right now (the audio leads the transcript).
+  const [analysis, setAnalysis] = useState<Analysis | null>(null)
   const [samSays, setSamSays] = useState<{ text: string; at: number; ms: number } | null>(null)
+  const [danaSays, setDanaSays] = useState<{ text: string; at: number; ms: number } | null>(null)
   const agentRef = useRef<VoiceAgent | null>(null)
+  // Tote Desk: the shift lead's own voice agent, sharing the mic on demand.
+  const deskRef = useRef<VoiceAgent | null>(null)
+  const micTo = useRef<'picker' | 'desk'>('picker')
+  const [deskOn, setDeskOn] = useState(false)
+  const [deskStatus, setDeskStatus] = useState<AgentStatus>('idle')
+  const [deskLines, setDeskLines] = useState<DeskLine[]>([])
   const audioRef = useRef<AudioIO | null>(null)
   const orbRef = useRef<HTMLDivElement>(null)
   const speakerLevel = useRef(0)
@@ -95,6 +114,24 @@ export default function App() {
     await a?.close()
   }, [])
 
+  // Second pass: re-transcribe the stereo recording with the pre-recorded model.
+  const analyze = useCallback(async (sessionId: string, language: string) => {
+    setAnalysis({ status: 'queued' })
+    try {
+      const r = await fetch('/api/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId, language }) })
+      const { id, error } = await r.json()
+      if (!id) throw new Error(error ?? 'could not start analysis')
+      for (let i = 0; i < 60; i++) {
+        await new Promise((ok) => setTimeout(ok, 3000))
+        const a = (await fetch(`/api/analyze/${id}`).then((x) => x.json())) as Analysis
+        setAnalysis(a)
+        if (a.status === 'completed' || a.status === 'error') return
+      }
+    } catch (e) {
+      setAnalysis({ status: 'error', error: (e as Error).message })
+    }
+  }, [])
+
   const finish = useCallback(
     async (sh: Shift, sessionId: string | null, recorded?: ReportData) => {
       await teardown()
@@ -124,11 +161,12 @@ export default function App() {
         const body = await res.json()
         if (!res.ok) throw new Error(body.error ?? res.statusText)
         setReport({ open: true, data: body, error: null })
+        if (sessionId) void analyze(sessionId, LANGS[snap.lang].label)
       } catch (e) {
         setReport({ open: true, data: null, error: `Could not build the report: ${(e as Error).message}` })
       }
     },
-    [teardown],
+    [teardown, analyze],
   )
 
   // Wire a shift to a fresh agent: the same path for a live mic and a replayed tape.
@@ -195,6 +233,7 @@ export default function App() {
     setWire([])
     setDetail(undefined)
     setReport({ open: false, data: null, error: null })
+    setAnalysis(null)
     shift.dispose()
     const sh = new Shift(lang)
     sh.setFarField(farField)
@@ -213,7 +252,7 @@ export default function App() {
         speakerLevel.current = level
         setSpeakerBusy(!idle)
       })
-      audio.onChunk(batcher(1200, (pcm) => agent.sendAudio(toBase64(pcm))))
+      audio.onChunk(batcher(1200, (pcm) => (micTo.current === 'desk' ? deskRef.current : agent)?.sendAudio(toBase64(pcm))))
       agent.connect(tok.token, sh.initialConfig())
     } catch (e) {
       const msg = (e as Error).message
@@ -236,12 +275,26 @@ export default function App() {
       const fps = Number(q.get('fps') ?? 30)
       const sh = new Shift(tape.lang)
       if (tape.tuning) sh.tuning = tape.tuning
+      if (tape.analysis) {
+        const last = tape.events[tape.events.length - 1]?.t ?? 0
+        later(() => setAnalysis(tape.analysis!), last + 1800)
+      }
       setShift(sh)
       const agent = bind(sh, tape.report)
+      let desk: VoiceAgent | null = null
       for (const ev of tape.events) {
         later(() => {
           if (ev.msg) agent.inject(ev.msg)
+          else if (ev.desk) desk?.inject(ev.desk)
           else if (ev.sam) setSamSays({ text: ev.sam, at: clockNow(), ms: ((ev.len ?? 0) / 2 / 24_000) * 1000 })
+          else if (ev.dana) {
+            const text = ev.dana
+            setDanaSays({ text, at: clockNow(), ms: ((ev.len ?? 0) / 2 / 24_000) * 1000 })
+          } else if (ev.deskOpen) {
+            desk = bindDesk(sh)
+            desk.attachReplay(new Desk(sh).config())
+            setDeskOn(true)
+          } else if (ev.deskClose) setDeskOn(false)
         }, ev.t)
       }
       agent.attachReplay(sh.initialConfig())
@@ -270,7 +323,78 @@ export default function App() {
     })()
   }, [bind])
 
-  const stop = () => agentRef.current?.end()
+  // The desk agent wires to the same shift; its tools act on the picker's session.
+  const bindDesk = useCallback(
+    (sh: Shift) => {
+      const desk = new Desk(sh)
+      const agent = new VoiceAgent(desk.handleTool, fromBase64)
+      deskRef.current = agent
+      const line = (who: DeskLine['who'], text: string, id: string) =>
+        setDeskLines((ls) => {
+          const i = ls.findIndex((l) => l.id === id)
+          const next = i === -1 ? [...ls, { id, who, text }] : ls.map((l, k) => (k === i ? { ...l, text } : l))
+          return next.slice(-6)
+        })
+      agent.on('status', (st) => setDeskStatus(st))
+      agent.on('wire', (e) => setWire((w) => [...w, { ...e, type: `desk · ${e.type}` }].slice(-250)))
+      agent.on('audio', (pcm) => audioRef.current?.play(pcm))
+      agent.on('bargeIn', () => audioRef.current?.flush())
+      agent.on('user', (id, text) => line('dana', text, `u-${id}`))
+      agent.on('agentDelta', (id, word, at) =>
+        later(
+          () =>
+            setDeskLines((ls) => {
+              const key = `a-${id}`
+              const i = ls.findIndex((l) => l.id === key)
+              const w = /^[\s.,!?;:]/.test(word) ? word : ` ${word}`
+              if (i === -1) return [...ls, { id: key, who: 'desk' as const, text: w.trim(), partial: true }].slice(-6)
+              if (!ls[i].partial) return ls
+              return ls.map((l, k) => (k === i ? { ...l, text: l.text + w } : l))
+            }),
+          Math.max(0, at - clockNow()),
+        ),
+      )
+      agent.on('agent', (id, text) => setDeskLines((ls) => {
+        const key = `a-${id}`
+        const i = ls.findIndex((l) => l.id === key)
+        return i === -1 ? [...ls, { id: key, who: 'desk' as const, text }].slice(-6) : ls.map((l, k) => (k === i ? { ...l, text, partial: false } : l))
+      }))
+      agent.on('toolCall', (name, args, id) => line('tool', `${name}(${Object.values(args).map((v) => JSON.stringify(v)).join(', ')})`, `t-${id}`))
+      return agent
+    },
+    [],
+  )
+
+  const toggleDesk = useCallback(async () => {
+    if (!audioRef.current) return
+    if (deskOn) {
+      micTo.current = 'picker'
+      setDeskOn(false)
+      return
+    }
+    micTo.current = 'desk'
+    setDeskOn(true)
+    if (deskRef.current && deskRef.current.ready) return
+    try {
+      const res = await fetch('/api/token')
+      const tok = await res.json()
+      if (!res.ok) throw new Error(tok.error)
+      const agent = bindDesk(shift)
+      agent.connect(tok.token, new Desk(shift).config())
+    } catch (e) {
+      micTo.current = 'picker'
+      setDeskOn(false)
+      setDeskStatus('error')
+      console.warn('desk', e)
+    }
+  }, [bindDesk, deskOn, shift])
+
+  const stop = () => {
+    deskRef.current?.end()
+    micTo.current = 'picker'
+    setDeskOn(false)
+    agentRef.current?.end()
+  }
 
   const newShift = () => {
     shift.dispose()
@@ -288,7 +412,7 @@ export default function App() {
     <div className={`app${isVirtual && !FULL ? ' video' : ''}`}>
       <header className="top">
         <a className="brand" href="/" aria-label="Tote">
-          <img src="/logo.svg" alt="" />
+          <img src="/icon-180.png" alt="" />
           <b>tote</b>
           <span className="brand-sub">Voice picking copilot</span>
         </a>
@@ -382,9 +506,11 @@ export default function App() {
         </div>
         <div className="side">
           <Headset s={s} status={status} detail={detail} captions={captions} orbRef={orbRef} />
-          <Desk
+          <DeskPanel
             s={s}
             live={live}
+            voice={{ on: deskOn, status: deskStatus, lines: deskLines, toggle: toggleDesk }}
+            onClear={() => shift.clearHazard()}
             onRush={() => shift.injectRush()}
             onBroadcast={(t) => {
               upsert(`d-${clockNow()}`, { who: 'sys', text: `Dana → Sam: “${t}”` })
@@ -403,10 +529,10 @@ export default function App() {
         <Wire events={wire} />
       </div>
 
-      {isVirtual && <VideoCaption captions={captions} sam={samSays} status={status} />}
+      {isVirtual && <VideoCaption captions={captions} sam={samSays} dana={danaSays} status={status} desk={{ status: deskStatus, lines: deskLines }} />}
       {isVirtual && <VideoChapter s={s} />}
 
-      {report.open && <Report s={s} data={report.data} error={report.error} onClose={() => setReport((r) => ({ ...r, open: false }))} onRestart={newShift} />}
+      {report.open && <Report s={s} data={report.data} error={report.error} analysis={analysis} onClose={() => setReport((r) => ({ ...r, open: false }))} onRestart={newShift} />}
     </div>
   )
 }
@@ -461,25 +587,33 @@ function Intro({ onStart, error }: { onStart: () => void; error?: string }) {
   )
 }
 
-function VideoCaption({ captions, sam, status }: { captions: Caption[]; sam: { text: string; at: number; ms: number } | null; status: AgentStatus }) {
+function VideoCaption({
+  captions,
+  sam,
+  dana,
+  status,
+  desk,
+}: {
+  captions: Caption[]
+  sam: { text: string; at: number; ms: number } | null
+  dana: { text: string; at: number; ms: number } | null
+  status: AgentStatus
+  desk: { status: AgentStatus; lines: DeskLine[] }
+}) {
   const t = clockNow()
-  if (sam && t - sam.at < sam.ms + 600) {
-    return (
-      <div className="vcap">
-        <b className="u">Sam</b>
-        <span>{sam.text}</span>
-      </div>
-    )
-  }
+  const cap = (who: string, cls: string, text: string) => (
+    <div className="vcap">
+      <b className={cls}>{who}</b>
+      <span>{text}</span>
+    </div>
+  )
+  if (sam && t - sam.at < sam.ms + 600) return cap('Sam', 'u', sam.text)
+  if (dana && t - dana.at < dana.ms + 600) return cap('Dana', 'd', dana.text)
   const agent = [...captions].reverse().find((c) => c.who === 'agent')
-  if (agent && (status === 'speaking' || agent.partial)) {
-    return (
-      <div className="vcap">
-        <b className="a">Tote</b>
-        <span>{agent.text.trim()}</span>
-      </div>
-    )
-  }
+  if (agent && (status === 'speaking' || agent.partial)) return cap('Tote', 'a', agent.text.trim())
+  // Only the desk's newest line, and only while it is the latest thing said there.
+  const d = desk.lines[desk.lines.length - 1]
+  if (d?.who === 'desk' && (desk.status === 'speaking' || d.partial)) return cap('Desk', 'k', d.text.trim())
   return null
 }
 

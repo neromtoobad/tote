@@ -73,6 +73,10 @@ const TAPE_DIR = process.env.TAPE ? path.join(ROOT, 'video', 'tapes', process.en
 const tape: { lang: LangKey; events: Record<string, unknown>[]; report?: unknown; session?: string | null; tuning?: unknown } = { lang: LANG, events: [] }
 const agentPcm: Buffer[] = []
 const samPcm: Buffer[] = []
+const deskPcm: Buffer[] = []
+const danaPcm: Buffer[] = []
+let deskBytes = 0
+let danaBytes = 0
 let agentBytes = 0
 let samBytes = 0
 const ts = () => `${((Date.now() - t0) / 1000).toFixed(1).padStart(5)}s`
@@ -146,6 +150,10 @@ const digitsSpoken = (d: string) => {
   return `${w[0].toUpperCase()}${w.slice(1)}.`
 }
 const BREAK = process.env.BREAK === '1'
+// DESK=1: Sam reports a spill on the way to F; Dana then talks to Tote Desk.
+const DESK = process.env.DESK === '1'
+let hazardDone = !DESK
+let deskStage: 'idle' | 'running' | 'done' = DESK ? 'idle' : 'done'
 let breakDone = !BREAK
 
 function nextUtterance(): string | null {
@@ -155,6 +163,10 @@ function nextUtterance(): string | null {
     case 'briefing':
       return P.ready
     case 'travel': {
+      if (DESK && !hazardDone && line?.id === 'L6') {
+        hazardDone = true
+        return "Heads up, there's a spill in aisle F."
+      }
       if (!line || !s.arrivedAt) return null
       const d = checkDigits(line.loc)
       if (!wrongDone && line.id === 'L3') {
@@ -214,6 +226,10 @@ function scheduleResponse() {
   const wait = Math.max(0, replyStart + replyAudioMs - Date.now()) + 750
   respondTimer = setTimeout(function tryRespond() {
     if (agent.status !== 'listening' || speech || owedTools > 0) return
+    if (deskStage === 'running') {
+      respondTimer = setTimeout(tryRespond, 600) // Dana has the floor
+      return
+    }
     if (answeredTurn === agentTurns) return
     const u = nextUtterance()
     if (!u) {
@@ -311,6 +327,8 @@ async function saveTape(s: ReturnType<typeof shift.getSnapshot>) {
   fs.writeFileSync(path.join(TAPE_DIR, 'tape.json'), JSON.stringify(tape))
   fs.writeFileSync(path.join(TAPE_DIR, 'agent.pcm'), Buffer.concat(agentPcm))
   fs.writeFileSync(path.join(TAPE_DIR, 'sam.pcm'), Buffer.concat(samPcm))
+  fs.writeFileSync(path.join(TAPE_DIR, 'desk.pcm'), Buffer.concat(deskPcm))
+  fs.writeFileSync(path.join(TAPE_DIR, 'dana.pcm'), Buffer.concat(danaPcm))
   console.log('tape saved to', TAPE_DIR, `${tape.events.length} events`)
 }
 setTimeout(() => {
@@ -318,6 +336,123 @@ setTimeout(() => {
   agent.end()
   setTimeout(finish, 3000)
 }, Number(process.env.MAX_S ?? 300) * 1000)
+
+// --- the desk scene: a second session for Dana, the shift lead -----------------------
+const DANA_LINES = ["Hey Tote, how's Sam doing?", 'The spill in aisle F is cleaned up.', 'Tell him great pace, and to grab some water after this tote.']
+let deskAgent: VoiceAgent | null = null
+let danaSpeech: Buffer | null = null
+let danaPos = 0
+let danaIdx = 0
+let deskTurns = 0
+let deskAnswered = -1
+let deskOwed = 0
+let deskResultSent = false
+let deskReplyStart = 0
+let deskReplyMs = 0
+let deskTimer: ReturnType<typeof setTimeout> | null = null
+
+function danaSays(text: string) {
+  out('DANA', text)
+  const pcm = Buffer.concat([Buffer.alloc(2400), fs.readFileSync(path.join(VOICE_DIR, VOICED[text])), Buffer.alloc(2400)])
+  danaSpeech = pcm
+  danaPos = 0
+  tape.events.push({ t: Date.now() - t0 + 25, dana: text, off: danaBytes, len: pcm.length })
+  danaPcm.push(pcm)
+  danaBytes += pcm.length
+}
+
+async function startDesk() {
+  deskStage = 'running'
+  out('DESK', 'Dana opens Tote Desk')
+  tape.events.push({ t: Date.now() - t0, deskOpen: true })
+  const { Desk } = await import('../src/sim/desk.ts')
+  const brain = new Desk(shift)
+  const d = new VoiceAgent(brain.handleTool, (b64) => {
+    const b = Buffer.from(b64, 'base64')
+    return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)
+  })
+  deskAgent = d
+  d.on('raw', (msg) => {
+    const t = Date.now() - t0
+    if (msg.type === 'reply.audio') {
+      const b = Buffer.from(String(msg.data), 'base64')
+      tape.events.push({ t, desk: { type: 'reply.audio', data: '' }, off: deskBytes, len: b.length })
+      deskPcm.push(b)
+      deskBytes += b.length
+    } else tape.events.push({ t, desk: msg })
+  })
+  d.on('audio', (pcm) => (deskReplyMs += (pcm.byteLength / 2 / RATE) * 1000))
+  d.on('user', (_, text) => out(' heard', `(desk) “${text}”`))
+  d.on('agent', (_, text) => {
+    out('DESK', text)
+    deskTurns++
+    if (deskResultSent) {
+      deskOwed = 0
+      deskResultSent = false
+    }
+  })
+  d.on('toolCall', (name, args) => {
+    deskOwed++
+    deskResultSent = false
+    out(' tool', `(desk) ${name}(${JSON.stringify(args)})`)
+  })
+  d.on('toolResult', () => (deskResultSent = true))
+  d.on('status', (st) => {
+    if (st === 'speaking') {
+      deskReplyStart = Date.now()
+      deskReplyMs = 0
+    }
+    if (st === 'listening') nextDana()
+  })
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${KEY}` } })
+  const { token: deskToken } = (await res.json()) as { token: string }
+  d.connect(deskToken, brain.config())
+}
+
+function nextDana() {
+  if (deskTimer) clearTimeout(deskTimer)
+  const wait = Math.max(0, deskReplyStart + deskReplyMs - Date.now()) + 900
+  deskTimer = setTimeout(function go() {
+    const d = deskAgent
+    if (!d || d.status !== 'listening' || danaSpeech || deskOwed > 0 || deskAnswered === deskTurns) return
+    // Let Sam's headset finish relaying before Dana goes on.
+    if (agent.status === 'speaking' || agent.status === 'thinking') {
+      deskTimer = setTimeout(go, 500)
+      return
+    }
+    deskAnswered = deskTurns
+    if (danaIdx < DANA_LINES.length) {
+      danaSays(DANA_LINES[danaIdx++])
+      return
+    }
+    // Wait for the relay to reach Sam, then close the desk and hand back.
+    setTimeout(() => {
+      out('DESK', 'Dana closes Tote Desk')
+      tape.events.push({ t: Date.now() - t0, deskClose: true })
+      d.end()
+      deskStage = 'done'
+      scheduleResponse()
+    }, 2500)
+  }, wait)
+}
+
+// Dana's mic: silence except while she speaks.
+setInterval(() => {
+  if (!deskAgent?.ready) return
+  let chunk = silence
+  if (danaSpeech) {
+    chunk = danaSpeech.subarray(danaPos, danaPos + CHUNK * 2)
+    danaPos += CHUNK * 2
+    if (chunk.length < CHUNK * 2) chunk = Buffer.concat([chunk, silence.subarray(chunk.length)])
+    if (danaPos >= danaSpeech.length) danaSpeech = null
+  }
+  deskAgent.sendAudio(chunk.toString('base64'))
+}, 50)
+
+// Open the desk once Tote has told Sam to hold for the spill.
+agent.on('agent', () => {
+  if (DESK && deskStage === 'idle' && shift.getSnapshot().hazard) setTimeout(() => void startDesk(), 1200)
+})
 
 // --- go -----------------------------------------------------------------------------
 const url = new URL('https://agents.assemblyai.com/v1/token')

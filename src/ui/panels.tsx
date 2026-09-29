@@ -11,6 +11,8 @@ import {
   ListChecks,
   Lock,
   Megaphone,
+  Mic,
+  MicOff,
   Package,
   PackageSearch,
   Radio,
@@ -329,29 +331,73 @@ export function Headset({
 }
 
 // --- shift lead desk ---------------------------------------------------------------
-const TASK_ICON = { replen: <PackageSearch size={14} />, qa: <ShieldAlert size={14} />, audit: <Flag size={14} />, lead: <Flag size={14} /> } as const
+const TASK_ICON = { replen: <PackageSearch size={14} />, qa: <ShieldAlert size={14} />, audit: <Flag size={14} />, lead: <Flag size={14} />, safety: <AlertTriangle size={14} /> } as const
+
+export type DeskLine = { id: string; who: 'dana' | 'desk' | 'tool'; text: string; partial?: boolean }
 
 export function Desk({
   s,
   live,
+  voice,
+  onClear,
   onRush,
   onBroadcast,
   onAnswer,
 }: {
   s: Snapshot
   live: boolean
+  voice: { on: boolean; status: AgentStatus; lines: DeskLine[]; toggle: () => void }
+  onClear: () => void
   onRush: () => void
   onBroadcast: (text: string) => void
   onAnswer: (text: string) => void
 }) {
   const [msg, setMsg] = useState('')
   const canRush = live && (s.phase === 'travel' || s.phase === 'pick') && !(s.rushAt && s.rushAt > 0)
-  const tagClass = { replen: 'warn', qa: 'bad', audit: 'info', lead: 'mute' } as const
+  const tagClass = { replen: 'warn', qa: 'bad', audit: 'info', lead: 'mute', safety: 'bad' } as const
   return (
     <div className="card desk">
       <div className="card-h">
         <span className="av">D</span> Shift lead desk <small>· Dana</small>
+        <button className={`talk${voice.on ? ' on' : ''}`} disabled={!live} onClick={voice.toggle} title="Talk to Tote Desk, the shift lead's voice agent">
+          {voice.on ? <MicOff size={14} /> : <Mic size={14} />}
+          {voice.on ? 'Back to Sam' : 'Talk to the floor'}
+        </button>
       </div>
+      {(voice.on || voice.lines.length > 0) && (
+        <div className={`deskvoice ${voice.status}`}>
+          <div className="dv-h">
+            <span className={`eq ${voice.on ? voice.status : ''}`} aria-hidden>
+              {[0, 1, 2, 3].map((i) => (
+                <span key={i} style={{ animationDelay: `${i * 0.12}s` }} />
+              ))}
+            </span>
+            <b>Tote Desk</b>
+            <small>{voice.on ? (voice.status === 'connecting' ? 'connecting…' : 'your mic is on the desk') : 'mic back on Sam'}</small>
+          </div>
+          {voice.lines.map((l) => (
+            <div key={l.id} className={`dv-l ${l.who}`}>
+              {l.who === 'tool' ? <code>ƒ {l.text}</code> : (
+                <>
+                  <b>{l.who === 'dana' ? 'Dana' : 'Desk'}</b> {l.text}
+                </>
+              )}
+            </div>
+          ))}
+          {voice.lines.length === 0 && <div className="dv-l hint">Try “How's Sam doing?”, “Tell him great pace”, or “Drop the rush order”.</div>}
+        </div>
+      )}
+      {s.hazard && (
+        <div className="hazard-alert">
+          <AlertTriangle size={16} />
+          <span>
+            <b>{s.hazard.kind}</b> in aisle {s.hazard.aisle}. Aisle closed.
+          </span>
+          <button className="btn sm" onClick={onClear}>
+            Mark cleared
+          </button>
+        </div>
+      )}
       {s.supervisor && (
         <div className="page">
           <span>

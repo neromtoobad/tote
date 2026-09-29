@@ -69,12 +69,12 @@ function tokens(text: string, lang: LangKey): Tok[] {
   return out
 }
 
-/** "7, 6." / "seven six" / "seventy-six" / "four oh" → "76" / "40". Last two digits heard win. */
-export function extractDigits(text: string, lang: LangKey): string {
+/** "7, 6." / "seven six" / "seventy-six" / "four oh" → "76" / "40". The last `keep` digits heard win. */
+export function extractDigits(text: string, lang: LangKey, keep = 2): string {
   const all = tokens(text, lang)
     .map((t) => t.digits)
     .join('')
-  return all.slice(-2)
+  return all.slice(-keep)
 }
 
 /** "Only 3 here" / "only three" / "picked two" → the number; null when none was said. */

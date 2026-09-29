@@ -86,6 +86,10 @@ export function FloorMap({ s, agent }: { s: Snapshot; agent: AgentStatus }) {
         <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
           <path d="M20 0H0V20" fill="none" stroke="#e8ebe5" strokeWidth="1" />
         </pattern>
+        <pattern id="hazard" width="16" height="16" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+          <rect width="16" height="16" fill="#fde8e6" />
+          <rect width="7" height="16" fill="#f7b4ad" />
+        </pattern>
         <filter id="soft" x="-50%" y="-50%" width="200%" height="200%">
           <feDropShadow dx="0" dy="2" stdDeviation="2.4" floodColor="#16181d" floodOpacity="0.22" />
         </filter>
@@ -158,6 +162,19 @@ export function FloorMap({ s, agent }: { s: Snapshot; agent: AgentStatus }) {
           })}
         </g>
       ))}
+
+      {/* a reported hazard closes the aisle */}
+      {s.hazard && (
+        <g>
+          <rect x={CROSS.left - 6} y={walkY(s.hazard.aisle) - 14} width={CROSS.right - CROSS.left + 12} height="28" rx="8" fill="url(#hazard)" opacity="0.9" />
+          <g transform={`translate(${(CROSS.left + CROSS.right) / 2} ${walkY(s.hazard.aisle)})`}>
+            <rect x="-92" y="-15" width="184" height="30" rx="15" fill="#b42318" filter="url(#soft)" />
+            <text textAnchor="middle" dy="5" fontSize="13" fontWeight="800" fill="#fff" letterSpacing="0.04em">
+              ⚠ {s.hazard.kind.toUpperCase()} · AISLE {s.hazard.aisle} CLOSED
+            </text>
+          </g>
+        </g>
+      )}
 
       {/* pack station */}
       <g transform={`translate(${PACK.x - 44} ${PACK.y - 22})`}>

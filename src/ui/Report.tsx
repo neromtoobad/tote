@@ -1,6 +1,19 @@
-import { AudioLines, ClipboardList, RotateCcw, X } from 'lucide-react'
+import { AudioLines, ClipboardList, RotateCcw, ScanSearch, X } from 'lucide-react'
+import { extractDigits } from '../sim/parse'
 import { metrics, type Snapshot } from '../sim/shift'
 import { code } from '../sim/warehouse'
+
+export type Analysis = {
+  status: string
+  error?: string
+  model?: string
+  duration?: number
+  talk?: { picker: number; agent: number }
+  wpm?: { picker: number; agent: number }
+  sentiment?: { at: number; sentiment: string; text: string }[]
+  highlights?: string[]
+  utterances?: { who: 'picker' | 'agent'; at: number; text: string }[]
+}
 
 export type ReportData = {
   notes: string
@@ -38,7 +51,106 @@ function inline(s: string) {
 const STATUS = { picked: 'ok', short: 'warn', damaged: 'bad', skipped: 'mute', pending: 'mute', active: 'brand' } as const
 const WORD = { picked: 'picked', short: 'short', damaged: 'QA hold', skipped: 'skipped', pending: 'not reached', active: 'in progress' } as const
 
-export function Report({ s, data, error, onClose, onRestart }: { s: Snapshot; data: ReportData | null; error: string | null; onClose: () => void; onRestart: () => void }) {
+// Every check read the live agent acted on, re-found in the independent
+// post-shift transcript of the picker's channel.
+function secondPass(s: Snapshot, a: Analysis) {
+  const reads = s.log
+    .filter((e) => e.kind === 'verify' || e.kind === 'mismatch')
+    .map((e) => ({ kind: e.kind, loc: e.loc ?? '', digits: (e.detail.match(/check (\d\d)|"(\d\d)"/) ?? []).slice(1).find(Boolean) ?? '' }))
+    .filter((r) => r.digits)
+  const said = (a.utterances ?? []).filter((u) => u.who === 'picker').map((u) => extractDigits(u.text, s.lang, 8))
+  return reads.map((r) => ({ ...r, heard: said.some((d) => d.includes(r.digits)) }))
+}
+
+function Analytics({ s, a }: { s: Snapshot; a: Analysis | null }) {
+  if (!a) return null
+  if (a.status !== 'completed')
+    return (
+      <div className="rep-card analytics">
+        <div className="rep-t">
+          <ScanSearch size={15} /> Voice analytics <small>Universal-3 Pro · pre-recorded, multichannel</small>
+        </div>
+        <div className="notes hint">{a.error ? `Analysis failed: ${a.error}` : 'Re-transcribing the stereo recording, one channel per speaker…'}</div>
+      </div>
+    )
+  const talk = a.talk ?? { picker: 0, agent: 0 }
+  const total = talk.picker + talk.agent || 1
+  const reads = secondPass(s, a)
+  const ok = reads.filter((r) => r.heard).length
+  const dur = (a.duration ?? 1) * 1000
+  const sent = a.sentiment ?? []
+  const count = (k: string) => sent.filter((x) => x.sentiment === k).length
+  return (
+    <div className="rep-card analytics">
+      <div className="rep-t">
+        <ScanSearch size={15} /> Voice analytics <small>AssemblyAI {a.model ?? 'Universal-3 Pro'} · pre-recorded, multichannel</small>
+      </div>
+      <div className="an-grid">
+        <div className="an-box">
+          <span className="an-k">Second-pass verification</span>
+          <b className={ok === reads.length ? 'good' : 'warnc'}>
+            {ok}/{reads.length}
+          </b>
+          <span className="an-s">check reads re-heard in the picker's channel of the recording</span>
+          <div className="an-reads">
+            {reads.map((r, i) => (
+              <span key={i} className={`an-read ${r.heard ? 'y' : 'n'} ${r.kind}`} title={r.kind === 'mismatch' ? 'rejected read' : 'verified read'}>
+                {r.loc} · {r.digits}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="an-box">
+          <span className="an-k">Who talked</span>
+          <div className="talkbar">
+            <span style={{ width: `${(talk.picker / total) * 100}%` }} className="p" />
+            <span style={{ width: `${(talk.agent / total) * 100}%` }} className="a" />
+          </div>
+          <span className="an-s">
+            Sam {Math.round(talk.picker)} s · Tote {Math.round(talk.agent)} s · Sam at {a.wpm?.picker ?? 0} wpm
+          </span>
+          <span className="an-k" style={{ marginTop: 8 }}>
+            Sam's tone across the shift
+          </span>
+          <div className="sentline">
+            {sent.map((x, i) => (
+              <i key={i} className={x.sentiment.toLowerCase()} style={{ left: `${Math.min(99, (x.at / dur) * 100)}%` }} title={`${x.sentiment}: ${x.text}`} />
+            ))}
+          </div>
+          <span className="an-s">
+            {count('POSITIVE')} positive · {count('NEUTRAL')} neutral · {count('NEGATIVE')} negative
+          </span>
+        </div>
+      </div>
+      {a.highlights && a.highlights.length > 0 && (
+        <div className="an-hl">
+          <span className="an-k">Key phrases</span>
+          {a.highlights.map((h) => (
+            <span key={h} className="pill mute">
+              {h}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function Report({
+  s,
+  data,
+  error,
+  analysis,
+  onClose,
+  onRestart,
+}: {
+  s: Snapshot
+  data: ReportData | null
+  error: string | null
+  analysis: Analysis | null
+  onClose: () => void
+  onRestart: () => void
+}) {
   const m = metrics(s)
   const stats: [string, string][] = [
     ['Lines', `${m.done}/${m.total}`],
@@ -51,7 +163,7 @@ export function Report({ s, data, error, onClose, onRestart }: { s: Snapshot; da
     <div className="overlay" onClick={onClose}>
       <div className="modal report" onClick={(e) => e.stopPropagation()}>
         <div className="rep-h">
-          <img src="/logo.svg" alt="" />
+          <img src="/icon-180.png" alt="" />
           <div>
             <h2>Shift report</h2>
             <span className="sub">
@@ -88,6 +200,7 @@ export function Report({ s, data, error, onClose, onRestart }: { s: Snapshot; da
             </p>
           </div>
         </div>
+        <Analytics s={s} a={analysis} />
         <table className="audit">
           <thead>
             <tr>

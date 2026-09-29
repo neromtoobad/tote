@@ -8,6 +8,8 @@ import { extractCount, extractDigits, mentions } from './parse.ts'
 import type { SessionConfig, ToolDef, ToolOutcome } from '../voice/agent.ts'
 import {
   AISLES,
+  type Aisle,
+  type Loc,
   checkDigits,
   code,
   demoBatch,
@@ -36,7 +38,8 @@ export type Line = OrderLine & {
   note?: string
 }
 
-export type Task = { id: string; kind: 'replen' | 'qa' | 'audit' | 'lead'; loc: string; text: string; at: number }
+export type Task = { id: string; kind: 'replen' | 'qa' | 'audit' | 'lead' | 'safety'; loc: string; text: string; at: number }
+export type Hazard = { aisle: Aisle; kind: string; at: number }
 export type LogEntry = { t: number; kind: string; loc?: string; item?: string; detail: string; heard?: string }
 export type Walk = { path: Pt[]; start: number; ms: number }
 export type SupervisorCall = { callId: string; reason: string; at: number }
@@ -241,6 +244,12 @@ const A = {
   report_empty_bin: { type: 'function', name: 'report_empty_bin', description: 'Call when the bin is completely empty.', parameters: EMPTY },
   skip_location: { type: 'function', name: 'skip_location', description: 'Call when the slot is blocked, cannot be found, or is unsafe to reach.', parameters: EMPTY },
   pause_shift: { type: 'function', name: 'pause_shift', description: 'Call when they want a break or the restroom, or report an equipment problem.', parameters: EMPTY },
+  report_hazard: {
+    type: 'function',
+    name: 'report_hazard',
+    description: 'Call when the picker reports a safety hazard: a spill, a leak, fallen stock, damaged racking, or an aisle blocked by a pallet or forklift.',
+    parameters: EMPTY,
+  },
   call_supervisor: {
     type: 'function',
     name: 'call_supervisor',
@@ -254,8 +263,8 @@ const A = {
 const ARGLESS_TOOLS: Record<Phase, string[]> = {
   offline: [],
   briefing: ['start_batch', 'shift_status', 'call_supervisor'],
-  travel: ['read_check_digits', 'skip_location', 'shift_status', 'pause_shift', 'call_supervisor'],
-  pick: ['confirm_pick', 'report_damaged', 'report_wrong_item', 'report_empty_bin', 'shift_status', 'pause_shift', 'call_supervisor'],
+  travel: ['read_check_digits', 'skip_location', 'report_hazard', 'shift_status', 'pause_shift', 'call_supervisor'],
+  pick: ['confirm_pick', 'report_damaged', 'report_wrong_item', 'report_empty_bin', 'report_hazard', 'shift_status', 'pause_shift', 'call_supervisor'],
   paused: ['resume_shift', 'shift_status', 'call_supervisor'],
   complete: ['end_shift', 'shift_status'],
   ended: [],
@@ -263,7 +272,7 @@ const ARGLESS_TOOLS: Record<Phase, string[]> = {
 
 export function toolCatalog(argless: boolean) {
   return argless
-    ? ['start_batch', 'read_check_digits', 'skip_location', 'confirm_pick', 'report_damaged', 'report_wrong_item', 'report_empty_bin', 'shift_status', 'pause_shift', 'resume_shift', 'call_supervisor', 'end_shift']
+    ? ['start_batch', 'read_check_digits', 'skip_location', 'confirm_pick', 'report_damaged', 'report_wrong_item', 'report_empty_bin', 'report_hazard', 'shift_status', 'pause_shift', 'resume_shift', 'call_supervisor', 'end_shift']
     : ['start_batch', 'confirm_location', 'skip_location', 'confirm_pick', 'report_exception', 'shift_status', 'pause_shift', 'resume_shift', 'call_supervisor', 'end_shift']
 }
 
@@ -323,6 +332,7 @@ export type Snapshot = Readonly<{
   tools: string[]
   slots: Map<string, Slot>
   endedAt: number | null
+  hazard: Hazard | null
 }>
 
 let seq = 100
@@ -370,6 +380,7 @@ export class Shift {
       tools: [],
       slots: demoSlots(),
       endedAt: null,
+      hazard: null,
     }
     this.snap = { ...this.s }
   }
@@ -427,8 +438,8 @@ export class Shift {
       { t: this.rel(), kind, detail, loc: line && code(line.loc), item: line?.item.name, heard: this.s.lastHeard || undefined },
     ]
   }
-  private task(kind: Task['kind'], line: Line, text: string) {
-    const prefix = { replen: 'RPL', qa: 'QA', audit: 'AUD', lead: 'LEAD' }[kind]
+  private task(kind: Task['kind'], line: Line | { loc: Loc }, text: string) {
+    const prefix = { replen: 'RPL', qa: 'QA', audit: 'AUD', lead: 'LEAD', safety: 'SAFE' }[kind]
     const t: Task = { id: `${prefix}-${++seq}`, kind, loc: code(line.loc), text, at: this.now() }
     this.s.tasks = [t, ...this.s.tasks]
     return t
@@ -523,7 +534,7 @@ Only the current step's tools exist. The latest tool result says where things st
 - When in doubt, call a tool. Call exactly one tool per turn.
 
 # Anytime
-- "How am I doing", "what's left" → shift_status. Break or equipment problem → pause_shift; back → resume_shift. Wants a person, unsafe, stuck → call_supervisor.`
+- "How am I doing", "what's left" → shift_status. Break or equipment problem → pause_shift; back → resume_shift. Wants a person, unsafe, stuck → call_supervisor. Spill, leak, fallen stock or blocked aisle → report_hazard.`
   }
 
   private summaryLine() {
@@ -597,7 +608,7 @@ You are Tote, the voice in a warehouse picker's headset. The picker, Sam, is wal
 # Anytime
 - "How am I doing", "what's left", "what's my rate" → shift_status.
 - Break, restroom, equipment problem → pause_shift.
-- Wants a person, feels unsafe, injured, or stuck → call_supervisor.
+- Wants a person, feels unsafe, injured, or stuck → call_supervisor.${this.tuning.argless ? '\n- Spill, leak, fallen stock, broken racking or a blocked aisle → report_hazard.' : ''}
 
 # Current state
 ${state}`
@@ -768,6 +779,66 @@ ${state}`
     this.changed()
   }
 
+  /** A picker reports a hazard: close the aisle, alert the lead, re-sequence. */
+  private hazardReport(said: string): ToolOutcome {
+    const lower = said.toLowerCase()
+    const named = lower.match(/\baisle\s+([a-f])\b/)
+    const cur = this.activeLine
+    const aisle = (named ? named[1].toUpperCase() : cur?.loc.aisle ?? 'A') as Aisle
+    const kind = mentions(lower, ['spill', 'leak', 'liquid', 'wet', 'oil'])
+      ? 'spill'
+      : mentions(lower, ['rack', 'shelf', 'beam'])
+        ? 'damaged racking'
+        : mentions(lower, ['fell', 'fallen', 'boxes on the floor'])
+          ? 'fallen stock'
+          : 'blocked aisle'
+    this.s.hazard = { aisle, kind, at: this.now() }
+    const t = this.task('safety', { loc: { aisle, bay: 1, level: 1 } }, `Safety: ${kind} in aisle ${aisle}, aisle closed`)
+    this.log('hazard', `Hazard: ${kind} in aisle ${aisle}; ${t.id} raised, lead alerted`)
+    // Picks in the closed aisle wait at the back of the queue.
+    let moved = 0
+    const keep: Line[] = []
+    const later: Line[] = []
+    for (const l of this.s.lines) {
+      const pendingHere = l.loc.aisle === aisle && (l.status === 'pending' || (l === cur && this.s.phase === 'travel'))
+      if (pendingHere) {
+        if (l === cur) l.status = 'pending'
+        later.push(l)
+        moved++
+      } else keep.push(l)
+    }
+    this.s.lines = [...keep, ...later]
+    let say = `Logged: ${kind} in aisle ${aisle}. Dana's been alerted.`
+    if (cur && cur.status === 'pending') {
+      const next = this.s.lines.findIndex((l) => l.status === 'pending' && l.loc.aisle !== aisle)
+      if (next >= 0) {
+        this.startLine(next)
+        say += ` Skip aisle ${aisle} for now. ${spoken(this.s.lines[next].loc)}.`
+      } else {
+        this.s.active = -1
+        say += ` Hold where you are until it's cleared.`
+      }
+    } else if (moved) say += ` Your aisle ${aisle} picks moved to the end.`
+    return this.outcome({ logged: kind, aisle, safety_task: t.id, say })
+  }
+
+  /** The lead marks the hazard cleared; returns the reopened aisle. */
+  clearHazard(): Aisle | null {
+    const h = this.s.hazard
+    if (!h) return null
+    this.s.hazard = null
+    this.log('hazard_clear', `Aisle ${h.aisle} cleared and reopened`)
+    this.s.tasks = this.s.tasks.filter((t) => !(t.kind === 'safety' && t.text.includes(`aisle ${h.aisle}`)))
+    if (this.s.active === -1 && (this.s.phase === 'travel' || this.s.phase === 'pick')) {
+      const next = this.s.lines.findIndex((l) => l.status === 'pending')
+      if (next >= 0) this.startLine(next)
+    }
+    this.changed()
+    this.port?.update(this.phaseConfig(), 'state → hazard cleared')
+    this.port?.say(`In one sentence, tell the picker aisle ${h.aisle} is clear again.`, `Dana cleared the ${h.kind} in aisle ${h.aisle}.`)
+    return h.aisle
+  }
+
   /** Guardrail: the model answered an actionable utterance without calling a
    *  tool. Run the check ourselves and have the agent correct itself. */
   guard(userText: string) {
@@ -840,6 +911,8 @@ ${state}`
         return this.run('pause_shift', { reason: mentions(said, ['bathroom', 'restroom', 'toilet', 'loo']) ? 'restroom' : mentions(said, ['battery', 'scanner', 'headset', 'equipment', 'broken']) ? 'equipment' : 'break' }, callId)
       case 'call_supervisor':
         return this.run('call_supervisor', { reason: said.trim() || 'help requested' }, callId)
+      case 'report_hazard':
+        return this.hazardReport(said)
       default:
         return this.run(name, args, callId)
     }

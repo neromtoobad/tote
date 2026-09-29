@@ -1,4 +1,4 @@
-<p align="center"><img src="public/favicon.svg" width="72" alt="Tote"></p>
+<p align="center"><img src="public/icon-512.png" width="112" alt="Tote"></p>
 
 <h1 align="center">Tote</h1>
 <p align="center"><b>A hands-free voice picking copilot for warehouses, built on the AssemblyAI Voice Agent API.</b><br>

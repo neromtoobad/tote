@@ -14,6 +14,10 @@ const dir = path.join(import.meta.dirname, 'tapes', name)
 const tape = JSON.parse(fs.readFileSync(path.join(dir, 'tape.json'), 'utf8'))
 const agent = fs.readFileSync(path.join(dir, 'agent.pcm'))
 const sam = fs.readFileSync(path.join(dir, 'sam.pcm'))
+const opt = (f) => (fs.existsSync(path.join(dir, f)) ? fs.readFileSync(path.join(dir, f)) : Buffer.alloc(0))
+const desk = opt('desk.pcm')
+const dana = opt('dana.pcm')
+let deskCursor = 0
 const R = 24000
 const at = (ms) => Math.round(((ms + lead) / 1000) * R)
 const last = tape.events[tape.events.length - 1].t
@@ -33,6 +37,19 @@ for (const e of tape.events) {
     const cut = at(e.t)
     for (let i = cut; i < Math.min(cursor, total); i++) out[i] = 0
     cursor = Math.min(cursor, cut)
+  } else if (e.desk?.type === 'reply.audio' && e.len) {
+    // The desk agent plays through the same speaker on its own queue.
+    const start = Math.max(deskCursor, at(e.t))
+    const n = e.len / 2
+    for (let i = 0; i < n && start + i < total; i++) out[start + i] += desk.readInt16LE(e.off + i * 2) / 32768
+    deskCursor = start + n
+  } else if (e.desk?.type === 'reply.done' && e.desk.status === 'interrupted') {
+    const cut = at(e.t)
+    for (let i = cut; i < Math.min(deskCursor, total); i++) out[i] = 0
+    deskCursor = Math.min(deskCursor, cut)
+  } else if (e.dana && e.len) {
+    const start = at(e.t)
+    for (let i = 0; i < e.len / 2 && start + i < total; i++) out[start + i] += (dana.readInt16LE(e.off + i * 2) / 32768) * 0.95
   } else if (e.sam && e.len) {
     const start = at(e.t)
     const n = e.len / 2

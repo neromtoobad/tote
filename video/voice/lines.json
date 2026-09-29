@@ -16,5 +16,10 @@
  "Done.": "14.pcm",
  "That's it. End my shift.": "15.pcm",
  "I need a quick break.": "16.pcm",
- "Okay, I'm back.": "17.pcm"
+ "Okay, I'm back.": "17.pcm",
+ "Hey Tote, how's Sam doing?": "dana18.pcm",
+ "Tell him great pace, and to grab some water after this tote.": "dana19.pcm",
+ "The spill in aisle F is cleaned up.": "dana20.pcm",
+ "Heads up, there's a spill in aisle F.": "sam21.pcm",
+ "What needs my attention?": "dana22.pcm"
 }

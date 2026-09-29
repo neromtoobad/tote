@@ -187,6 +187,79 @@ async function buildReport(sessionId: string | undefined, log: unknown) {
   }
 }
 
+// --- post-shift voice analytics (async Universal-3 Pro on the recording) --------
+// The session recording is stereo: left = picker, right = agent. A multichannel
+// pre-recorded pass gives an independent transcript per speaker, sentiment per
+// sentence and key phrases, which the report uses to re-verify every check read.
+const STT = 'https://api.assemblyai.com/v2/transcript'
+const LANG_CODE: Record<string, string> = { English: 'en', Español: 'es', Deutsch: 'de', Français: 'fr', Italiano: 'it', Português: 'pt' }
+
+async function startAnalysis(sessionId: string, language?: string) {
+  const session = await sessionWithArtifacts(sessionId, 30_000)
+  const audio = session.artifacts?.find((a) => a.type === 'audio')
+  if (!audio) throw new Error('recording not ready yet')
+  const res = await fetch(STT, {
+    method: 'POST',
+    headers: { Authorization: KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      audio_url: audio.url,
+      multichannel: true,
+      language_code: LANG_CODE[language ?? ''] ?? 'en',
+      speech_models: ['universal-3-pro', 'universal-2'],
+      sentiment_analysis: true,
+      auto_highlights: true,
+    }),
+  })
+  const body = (await res.json()) as { id?: string; error?: string }
+  if (!res.ok || !body.id) throw new Error(`transcript ${res.status} ${body.error ?? ''}`)
+  return { id: body.id }
+}
+
+type Utt = { channel?: string; start: number; end: number; text: string; words?: unknown[] }
+type Sent = { channel?: string; start: number; end: number; text: string; sentiment: string; confidence: number }
+
+async function readAnalysis(id: string) {
+  const res = await fetch(`${STT}/${encodeURIComponent(id)}`, { headers: { Authorization: KEY } })
+  const d = (await res.json()) as {
+    status: string
+    error?: string
+    speech_model_used?: string
+    audio_duration?: number
+    utterances?: Utt[]
+    sentiment_analysis_results?: Sent[]
+    auto_highlights_result?: { results?: { text: string; count: number; rank: number }[] }
+  }
+  if (d.status !== 'completed') return { status: d.status, error: d.error }
+  const utts = d.utterances ?? []
+  const who = (u: { channel?: string }) => (String(u.channel) === '1' ? 'picker' : 'agent')
+  const talk = { picker: 0, agent: 0 }
+  const words = { picker: 0, agent: 0 }
+  for (const u of utts) {
+    talk[who(u)] += (u.end - u.start) / 1000
+    words[who(u)] += u.text.split(/\s+/).filter(Boolean).length
+  }
+  const sentiment = (d.sentiment_analysis_results ?? [])
+    .filter((x) => who(x) === 'picker')
+    .map((x) => ({ at: x.start, sentiment: x.sentiment, text: x.text }))
+  return {
+    status: 'completed',
+    model: d.speech_model_used ?? 'universal-3-pro',
+    duration: d.audio_duration ?? 0,
+    talk,
+    wpm: {
+      picker: talk.picker ? Math.round((words.picker / talk.picker) * 60) : 0,
+      agent: talk.agent ? Math.round((words.agent / talk.agent) * 60) : 0,
+    },
+    sentiment,
+    highlights: (d.auto_highlights_result?.results ?? [])
+      .filter((h) => !/^(bay|level|aisle|sam)$/i.test(h.text))
+      .sort((a, b) => b.rank - a.rank)
+      .slice(0, 8)
+      .map((h) => h.text),
+    utterances: utts.map((u) => ({ who: who(u), at: u.start, text: u.text })),
+  }
+}
+
 // --- http ---------------------------------------------------------------------
 const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -249,6 +322,13 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/report' && req.method === 'POST') {
       const { sessionId, log } = JSON.parse(await readBody(req)) as { sessionId?: string; log: unknown }
       return send(res, 200, await buildReport(sessionId, log))
+    }
+    if (url.pathname === '/api/analyze' && req.method === 'POST') {
+      const { sessionId, language } = JSON.parse(await readBody(req)) as { sessionId: string; language?: string }
+      return send(res, 200, await startAnalysis(sessionId, language))
+    }
+    if (url.pathname.startsWith('/api/analyze/')) {
+      return send(res, 200, await readAnalysis(url.pathname.slice('/api/analyze/'.length)))
     }
     if (url.pathname.startsWith('/api/')) return send(res, 404, { error: 'not found' })
     return serveStatic(req, res)
