@@ -103,7 +103,9 @@ export function rushLines(): OrderLine[] {
 }
 
 // --- floor geometry (SVG units) ----------------------------------------------
-export const FLOOR = { w: 1000, h: 640 }
+export const FLOOR = { w: 1210, h: 640 }
+/** Right-hand strip of the floor card where Sam's pose is staged. */
+export const STAGE_X = 960
 export const RACK = { x0: 170, bayW: 72, depth: 30, rowGap: 92, y0: 58 }
 export const CROSS = { left: 110, right: 924 }
 export const PACK = { x: 64, y: 604 }

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { Line, Snapshot, Walk } from '../sim/shift'
+import { poseFor, useNow } from './pose'
 import type { AgentStatus } from '../voice/agent'
 import {
   AISLES,
@@ -9,6 +10,7 @@ import {
   LEVELS,
   PACK,
   RACK,
+  STAGE_X,
   bayX,
   pathLength,
   pointAt,
@@ -35,6 +37,10 @@ function posAt(walk: Walk, now: number): Pt {
 
 export function FloorMap({ s, agent }: { s: Snapshot; agent: AgentStatus }) {
   const pickerRef = useRef<SVGGElement>(null)
+  const flipRef = useRef<SVGGElement>(null)
+  const lastX = useRef<number | null>(null)
+  const now = useNow(500)
+  const mapPose = poseFor(s, true, now)
   const routeRef = useRef<SVGPolylineElement>(null)
   const walkRef = useRef(s.walk)
   walkRef.current = s.walk
@@ -46,6 +52,11 @@ export function FloorMap({ s, agent }: { s: Snapshot; agent: AgentStatus }) {
       const now = Date.now()
       const p = posAt(w, now)
       pickerRef.current?.setAttribute('transform', `translate(${p.x} ${p.y})`)
+      // Face the direction of travel (the sprites face right).
+      if (lastX.current !== null && Math.abs(p.x - lastX.current) > 0.3) {
+        flipRef.current?.setAttribute('transform', p.x < lastX.current ? 'scale(-1 1)' : '')
+      }
+      lastX.current = p.x
       // Draw only the part of the route still ahead of the picker.
       const t = w.ms ? Math.min(1, (now - w.start) / w.ms) : 1
       if (routeRef.current) {
@@ -81,7 +92,10 @@ export function FloorMap({ s, agent }: { s: Snapshot; agent: AgentStatus }) {
         </filter>
       </defs>
       <rect width={FLOOR.w} height={FLOOR.h} fill="#eef1ec" />
-      <rect width={FLOOR.w} height={FLOOR.h} fill="url(#grid)" />
+      <rect width={STAGE_X} height={FLOOR.h} fill="url(#grid)" />
+
+      <rect x={STAGE_X} y="0" width={FLOOR.w - STAGE_X} height={FLOOR.h} fill="#f7f8f5" />
+      <line x1={STAGE_X} x2={STAGE_X} y1="0" y2={FLOOR.h} stroke="#dee1da" />
 
       {/* walkways */}
       <g stroke="#c4c9bf" strokeDasharray="6 7" strokeWidth="1.5" fill="none">
@@ -169,30 +183,24 @@ export function FloorMap({ s, agent }: { s: Snapshot; agent: AgentStatus }) {
             )}
             <circle r={isActive ? 12 : 10} fill={color} stroke="#fff" strokeWidth="2.5" filter="url(#soft)" />
             <text textAnchor="middle" dy="4" fontSize={isActive ? 12 : 11} fontWeight="800" fill="#fff">
-              {l.status === 'picked' ? '✓' : l.status === 'damaged' || l.status === 'skipped' ? '×' : l.rush ? '⚡' : i + 1}
+              {l.status === 'picked' ? '✓' : l.status === 'short' ? '!' : l.status === 'damaged' || l.status === 'skipped' ? '×' : l.rush ? '⚡' : i + 1}
             </text>
           </g>
         )
       })}
 
-      {/* picker */}
+      {/* picker: the same 3D Sam, posed by state, walking the floor */}
       <g ref={pickerRef}>
-        <ellipse cx="0" cy="15" rx="12" ry="4" fill="#16181d" opacity="0.15" />
+        <ellipse cx="0" cy="2" rx="13" ry="4" fill="#16181d" opacity="0.18" />
         {agent === 'speaking' && (
-          <circle r="20" fill="none" stroke="var(--brand)" strokeWidth="2" opacity="0.5">
-            <animate attributeName="r" values="16;24;16" dur="0.9s" repeatCount="indefinite" />
-          </circle>
+          <ellipse cx="0" cy="2" rx="18" ry="6" fill="none" stroke="var(--brand)" strokeWidth="2" opacity="0.6">
+            <animate attributeName="rx" values="14;22;14" dur="0.9s" repeatCount="indefinite" />
+          </ellipse>
         )}
-        <circle r="14" fill="#fff" stroke="var(--brand)" strokeWidth="3" filter="url(#soft)" />
-        <text textAnchor="middle" dy="5" fontSize="13" fontWeight="800" fill="#1d2230">
-          S
-        </text>
-        {/* headset */}
-        <path d="M-10 -4 A10 10 0 0 1 10 -4" fill="none" stroke="#1d2230" strokeWidth="2.5" />
-        <rect x="-13" y="-6" width="5" height="8" rx="2" fill="#1d2230" />
-        <rect x="8" y="-6" width="5" height="8" rx="2" fill="#1d2230" />
+        <g ref={flipRef}>
+          <image href={`/sam/${mapPose}.webp`} x={-19} y={-78} height="80" width="38" preserveAspectRatio="xMidYMax meet" />
+        </g>
       </g>
-
     </svg>
   )
 }

@@ -26,3 +26,10 @@ dist-ssr
 .env
 .env.*
 !.env.example
+
+# source art (sheets are large; sprites live in public/sam)
+art/*.png
+art/*.raw
+art/*.bin
+art/*.json
+art/*.jpg

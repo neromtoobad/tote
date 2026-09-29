@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { LANGS, metrics, type Line, type Snapshot } from '../sim/shift'
-import { bayX, checkDigits, code, rackY, spoken, FLOOR } from '../sim/warehouse'
+import { bayX, checkDigits, code, rackY, spoken, FLOOR, STAGE_X } from '../sim/warehouse'
+import { POSE_CAPTION, poseFor, useNow } from './pose'
 import type { AgentStatus, WireEvent } from '../voice/agent'
 
 export type Caption = { id: string; who: 'agent' | 'user' | 'tool' | 'sys'; text: string; partial?: boolean; cut?: boolean }
@@ -340,4 +341,41 @@ export function Wire({ events }: { events: WireEvent[] }) {
 
 export function spokenLoc(line?: Line) {
   return line ? spoken(line.loc) : ''
+}
+
+// --- Sam, staged on the right of the floor card --------------------------------------
+export function SamStage({ s }: { s: Snapshot }) {
+  const now = useNow(400)
+  const pose = poseFor(s, false, now)
+  const line = s.lines[s.active]
+  const idx = s.active + 1
+  const recent = s.lastHeard
+  return (
+    <div className="stage" style={{ left: `${(STAGE_X / FLOOR.w) * 100}%`, width: `${((FLOOR.w - STAGE_X) / FLOOR.w) * 100}%` }}>
+      <div className="stage-h">
+        <b>Sam</b>
+        <span>{POSE_CAPTION[pose]}</span>
+      </div>
+      {recent && s.phase !== 'offline' ? (
+        <div className="bubble" key={recent}>
+          “{recent}”
+        </div>
+      ) : (
+        <div className="bubble muted">Hands full. Eyes on the shelf.</div>
+      )}
+      <img className={`sam pose-${pose}`} src={`/sam/${pose}.webp`} alt={`Sam, ${POSE_CAPTION[pose].toLowerCase()}`} key={pose} />
+      <div className="stage-f mono">
+        {line ? (
+          <>
+            <span>
+              line {idx}/{s.lines.length}
+            </span>
+            <b>{code(line.loc)}</b>
+          </>
+        ) : (
+          <span>{s.phase === 'complete' || s.phase === 'ended' ? 'tote complete' : 'tote T-1042'}</span>
+        )}
+      </div>
+    </div>
+  )
 }

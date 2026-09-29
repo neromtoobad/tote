@@ -3,7 +3,7 @@ import { LANGS, Shift, type LangKey } from './sim/shift'
 import { batcher, fromBase64, openAudio, toBase64, type AudioIO } from './voice/audio'
 import { VoiceAgent, type AgentStatus, type WireEvent } from './voice/agent'
 import { FloorMap } from './ui/FloorMap'
-import { Activity, Desk, Headset, Kpis, SlotCard, Wire, type Caption } from './ui/panels'
+import { Activity, Desk, Headset, Kpis, SamStage, SlotCard, Wire, type Caption } from './ui/panels'
 import { Report, type ReportData } from './ui/Report'
 
 const PHASES = ['briefing', 'travel', 'pick', 'complete'] as const
@@ -257,6 +257,7 @@ export default function App() {
             </div>
             {s.rushAt && s.rushAt > 0 ? <span className="pill brand">⚡ RUSH-7781 · courier 14:30</span> : null}
           </div>
+          <SamStage s={s} />
           <SlotCard s={s} />
           {s.phase === 'offline' && !busy && <Intro onStart={start} error={status === 'error' ? detail : undefined} />}
           {s.phase === 'ended' && !report.open && (
