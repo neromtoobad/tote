@@ -1,0 +1,15 @@
+{
+  "run": "score-fr",
+  "language": "fr",
+  "noisy": false,
+  "lines_correct": 8,
+  "lines_total": 8,
+  "wrong_slot_rejected": 1,
+  "misread_reasked": 0,
+  "guard_corrections": 1,
+  "latency_p50_ms": 1766,
+  "latency_p95_ms": 2065,
+  "turns": 20,
+  "first_verified_pick_s": 11.8,
+  "session": "sess_5955483555924198acaeeb6a5afe1459"
+}

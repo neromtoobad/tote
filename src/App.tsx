@@ -629,6 +629,9 @@ const CHAPTERS: Record<string, [string, string]> = {
   resume: ['Back to work', 'resume_shift'],
   complete: ['Tote complete', 'shift report from the session recording'],
   guard: ['Guardrail: the model answered without checking', 'the state machine ran the check and corrected it'],
+  hazard: ['Spill reported: aisle closed, lead alerted', 'report_hazard · safety task + re-sequenced picks'],
+  hazard_clear: ['Dana clears it by voice: the aisle reopens', 'Tote Desk · clear_hazard acts on the headset session'],
+  broadcast: ["Dana's message, relayed into Sam's headset", 'Tote Desk → message_picker → reply.create'],
 }
 
 function VideoChapter({ s }: { s: ReturnType<Shift['getSnapshot']> }) {

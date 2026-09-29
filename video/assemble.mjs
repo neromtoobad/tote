@@ -16,7 +16,8 @@ const arg = (k, d) => {
   return i >= 0 ? args[i + 1] : d
 }
 const cuts = args.flatMap((a, i) => (a === '--cut' ? [args[i + 1].split('-').map(Number)] : []))
-const N = (i) => path.join(here, 'narration', `n${i}.wav`)
+const NARR = process.env.NARR ?? 'narration2'
+const N = (i) => path.join(here, NARR, `n${i}.wav`)
 const ff = (...a) => execFileSync(FF, ['-y', '-loglevel', 'error', ...a], { stdio: 'inherit' })
 function probe(f) {
   try {
@@ -65,7 +66,7 @@ function demo() {
   return parts
 }
 
-const segs = [scene('intro', [[0, 0.8], [1, 9.2], [2, 18.0]]), ...demo(), scene('tech', [[3, 0.6], [4, 8.6], [5, 24.2]]), scene('outro', [[6, 0.8]])]
+const segs = [scene('intro', [[0, 2.2], [1, 10.0]]), ...demo(), scene('tech', [[2, 0.4], [3, 8.6], [4, 19.8]]), scene('outro', [[5, 0.6]])]
 const list = path.join(out, 'final-list.txt')
 fs.writeFileSync(list, segs.map((s) => `file '${s}'`).join('\n'))
 const file = path.join(out, 'tote-demo.mp4')

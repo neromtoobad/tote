@@ -37,16 +37,6 @@ for (const e of tape.events) {
     const cut = at(e.t)
     for (let i = cut; i < Math.min(cursor, total); i++) out[i] = 0
     cursor = Math.min(cursor, cut)
-  } else if (e.desk?.type === 'reply.audio' && e.len) {
-    // The desk agent plays through the same speaker on its own queue.
-    const start = Math.max(deskCursor, at(e.t))
-    const n = e.len / 2
-    for (let i = 0; i < n && start + i < total; i++) out[start + i] += desk.readInt16LE(e.off + i * 2) / 32768
-    deskCursor = start + n
-  } else if (e.desk?.type === 'reply.done' && e.desk.status === 'interrupted') {
-    const cut = at(e.t)
-    for (let i = cut; i < Math.min(deskCursor, total); i++) out[i] = 0
-    deskCursor = Math.min(deskCursor, cut)
   } else if (e.dana && e.len) {
     const start = at(e.t)
     for (let i = 0; i < e.len / 2 && start + i < total; i++) out[start + i] += (dana.readInt16LE(e.off + i * 2) / 32768) * 0.95
@@ -64,6 +54,21 @@ for (const e of tape.events) {
         out[s0 + i] += Math.sin((2 * Math.PI * f * i) / R) * 0.06 * env
       }
     }
+  }
+}
+
+// Second pass: the desk agent, on its own queue. Dana's desk and Sam's headset
+// are different places, so where both agents talk at once the desk ducks.
+const headsetOn = new Uint8Array(total)
+for (const [a, b] of placed) headsetOn.fill(1, a, Math.min(b, total))
+for (const e of tape.events) {
+  if (e.desk?.type === 'reply.audio' && e.len) {
+    const start = Math.max(deskCursor, at(e.t))
+    const n = e.len / 2
+    for (let i = 0; i < n && start + i < total; i++) out[start + i] += (desk.readInt16LE(e.off + i * 2) / 32768) * (headsetOn[start + i] ? 0.12 : 1)
+    deskCursor = start + n
+  } else if (e.desk?.type === 'reply.done' && e.desk.status === 'interrupted') {
+    deskCursor = Math.min(deskCursor, at(e.t))
   }
 }
 

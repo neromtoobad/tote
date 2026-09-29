@@ -102,6 +102,11 @@
   .list { margin: 0; padding-left: 30px; }
   .links { font-family: var(--mono); font-size: 30px; display: flex; flex-direction: column; gap: 14px; }
   .links b { color: var(--brand-ink); }
+  table.score { width: 100%; border-collapse: collapse; font-size: 22px; }
+  table.score th { text-align: left; font-size: 16px; color: var(--muted); font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  table.score td { padding: 9px 10px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 20px; }
+  table.score td.ok { color: var(--ok); font-weight: 800; }
+  table.score td.bad { color: var(--bad); font-weight: 800; }
 </style>
 </head>
 <body>
@@ -146,7 +151,7 @@
       <div class="card step" data-in="0.9"><div class="ic">🧭</div><div><b>Directs the walk</b><span>"Aisle B, bay 7, level 1." The route shows on the floor map.</span></div></div>
       <div class="card step" data-in="1.4"><div class="ic">🔢</div><div><b>Proves the location</b><span>The picker reads the check digits off the label. A wrong slot is rejected before anything leaves the shelf.</span></div></div>
       <div class="card step" data-in="1.9"><div class="ic">📦</div><div><b>Directs the pick</b><span>"Got them", "only three here", "this one's damaged": plain speech, no command list.</span></div></div>
-      <div class="card step" data-in="2.4"><div class="ic">⚡</div><div><b>Handles the floor</b><span>Shorts raise replenishment, damage goes on QA hold, rush orders re-route the picker mid-walk.</span></div></div>
+      <div class="card step" data-in="2.4"><div class="ic">⚡</div><div><b>Handles the floor</b><span>Shorts raise replenishment, damage goes on QA hold, a spill closes the aisle, rush orders re-route the picker mid-walk.</span></div></div>
     </div>
     <img class="shot" src="/video/out/final4-still-58.png" alt="" style="width: 980px" data-in="0.6" />
   </div>
@@ -166,102 +171,128 @@
         <li>Read the <b>check digits</b> off the label card (try a wrong one first)</li>
         <li>B-07-1 has 3 mugs for an order of 4: <b>"only three here"</b></li>
         <li>D-06-2's yoga mat is crushed: <b>"this one's damaged"</b></li>
-        <li>Watch the rush order re-route you. Ask <b>"how am I doing?"</b></li>
-        <li>Page your lead, then answer as Dana on the desk</li>
+        <li>Watch the rush order re-route you. Say <b>"there's a spill in aisle F"</b></li>
+        <li>On the desk, click <b>Talk to the floor</b>: "How's Sam doing?", "Tell him great pace"</li>
       </ul>
     </div>
   </div>
 </section>
 
-<!-- 5 · architecture -->
+<!-- 5 · two agents -->
 <section class="slide" id="s5">
-  <span class="kicker" data-in="0.1">How it works</span>
-  <h2 data-in="0.3">One WebSocket. The key never leaves the server.</h2>
-  <div class="row" style="gap: 20px; align-items: stretch; margin-top: 10px">
-    <div class="card box" style="width: 610px" data-in="0.8">
-      <h3>Browser headset app</h3>
-      <ul>
-        <li>Mic → AudioWorklet → PCM16 @ 24 kHz</li>
-        <li>Ring-buffer playback, flushed on server-confirmed barge-in</li>
-        <li>Shift state machine runs the client-side tools</li>
-        <li>Floor map, captions, shift-lead desk</li>
-      </ul>
+  <span class="kicker" data-in="0.1">Two agents, one floor</span>
+  <h2 data-in="0.3">The picker and the shift lead each get a voice agent.</h2>
+  <div class="row" style="gap: 20px; align-items: stretch; margin-top: 6px">
+    <div class="card box" style="flex: 1" data-in="0.9">
+      <div class="row" style="gap: 14px; align-items: center"><img src="/sam/lift.webp" alt="" style="height: 150px" /><div><h3>Tote · in Sam's headset</h3><span class="src">Voice Agent API session 1 · picker's language</span></div></div>
+      <ul><li>Directs every pick, proves every slot</li><li>Logs shorts, damage and hazards as Sam speaks</li><li>Speaks up unprompted: rush re-routes, relayed messages</li></ul>
     </div>
-    <div class="wire" style="width: 250px" data-in="1.6">
-      <span class="evt">input.audio</span><span class="arrow">⇄</span><span class="evt">reply.audio</span><span class="evt">tool.call</span><span class="evt">tool.result</span><span class="evt">session.update</span>
+    <div class="wire" style="width: 300px" data-in="1.8">
+      <span class="evt">message_picker</span><span class="arrow">⇄</span><span class="evt">clear_hazard</span><span class="evt">answer_page</span><span class="evt">drop_rush_order</span><span class="evt">floor_status</span>
+      <span style="font-family: var(--ui); font-size: 16px; text-align: center; margin-top: 6px">the desk's tools act on<br />the headset's session</span>
     </div>
-    <div class="card box" style="flex: 1; border-color: var(--brand); border-width: 2px" data-in="2.2">
-      <h3>AssemblyAI Voice Agent API</h3>
-      <ul>
-        <li>Universal-3 Pro streaming speech-to-text, keyterms</li>
-        <li>Semantic turn detection and barge-in</li>
-        <li>LLM with JSON-Schema tool calling</li>
-        <li>Voices: alba, lola, juergen, estelle, giovanni, rafael</li>
-        <li>voice_focus far-field for a noisy floor</li>
-      </ul>
+    <div class="card box" style="flex: 1; border-color: var(--info); border-width: 2px" data-in="2.4">
+      <div class="row" style="gap: 14px; align-items: center"><div style="width: 110px; height: 110px; border-radius: 50%; background: var(--ink); color: #fff; display: grid; place-items: center; font-size: 54px; font-weight: 800">D</div><div><h3>Tote Desk · for Dana</h3><span class="src">Voice Agent API session 2 · shift lead</span></div></div>
+      <ul><li>"How's Sam doing?" answered from the live floor</li><li>"Tell him great pace": relayed in Sam's language</li><li>"The spill in F is cleaned up": the aisle reopens</li></ul>
     </div>
   </div>
-  <div class="row" style="gap: 20px" data-in="3.6">
-    <div class="card box grow"><h3>Node server</h3><ul><li>Mints single-use tokens (<span class="mono">GET /v1/token</span>), rate-limited</li><li>Session cap, 15 min</li></ul></div>
-    <div class="card box grow"><h3>Sessions API</h3><ul><li>Recording + conversation timeline for every shift</li><li>Shift report and audit trail for every pick</li></ul></div>
+  <div class="card callout" data-in="4.6"><span class="big">⚠️</span><div><b>Safety built in.</b> "There's a spill in aisle F" closes the aisle on the map, raises a safety task, alerts the desk and re-sequences Sam's picks.</div></div>
+</section>
+
+<!-- 6 · architecture -->
+<section class="slide" id="s6">
+  <span class="kicker" data-in="0.1">How it works</span>
+  <h2 data-in="0.3">Four AssemblyAI products, four jobs.</h2>
+  <div class="row" style="gap: 18px; align-items: stretch; margin-top: 6px">
+    <div class="card box" style="flex: 1" data-in="0.8"><h3>🎧 The headset</h3><span class="src">Voice Agent API</span><ul><li>Two live sessions over one WebSocket each</li><li>Client tools revealed per step with session.update</li><li>reply.create, hold mode, semantic barge-in</li></ul></div>
+    <div class="card box" style="flex: 1" data-in="1.4"><h3>👂 The ears</h3><span class="src">Universal-3 Pro streaming, inside the agent</span><ul><li>keyterms + transcription prompt for SKUs</li><li>voice_focus far-field for a noisy floor</li><li>Pinned end-of-turn: 1.6 s to voice</li></ul></div>
+    <div class="card box" style="flex: 1" data-in="2.0"><h3>📼 The black box</h3><span class="src">Sessions API</span><ul><li>Stereo recording (picker L, agent R)</li><li>Conversation timeline per shift</li><li>Audit trail behind every pick</li></ul></div>
+    <div class="card box" style="flex: 1; border-color: var(--brand); border-width: 2px" data-in="2.6"><h3>🔍 The auditor</h3><span class="src">Universal-3 Pro pre-recorded</span><ul><li>Multichannel re-transcription</li><li>Re-checks every check-digit read</li><li>Sentiment + key phrases per shift</li></ul></div>
+  </div>
+  <div class="row" style="gap: 18px" data-in="3.6">
+    <div class="card box grow"><h3>Browser</h3><ul><li>AudioWorklet capture + ring-buffer playback, 24 kHz PCM16</li><li>The shift state machine owns every fact</li></ul></div>
+    <div class="card box grow"><h3>Node server</h3><ul><li>Single-use tokens; the API key never reaches the browser</li><li>Shift report + second-pass analysis endpoints</li></ul></div>
   </div>
 </section>
 
-<!-- 6 · the constrained agent -->
-<section class="slide" id="s6">
+<!-- 7 · the constrained agent -->
+<section class="slide" id="s7">
   <span class="kicker" data-in="0.1">A constrained agent</span>
-  <h2 data-in="0.3">Each step exposes only the tools it needs.</h2>
+  <h2 data-in="0.3">Each step unlocks only the tools it needs.</h2>
   <div class="row" style="gap: 12px; align-items: stretch">
     <div class="card phase" data-in="1.0"><h4>Briefing</h4><span class="chip">start_batch</span></div>
     <span class="arrowr" data-in="1.2">→</span>
-    <div class="card phase" data-in="1.4"><h4>Travel</h4><span class="chip">read_check_digits</span><span class="chip">skip_location</span></div>
+    <div class="card phase" data-in="1.4"><h4>Travel</h4><span class="chip">read_check_digits</span><span class="chip">skip_location</span><span class="chip">report_hazard</span></div>
     <span class="arrowr" data-in="1.6">→</span>
     <div class="card phase" data-in="1.8"><h4>Pick</h4><span class="chip">confirm_pick</span><span class="chip">report_damaged</span><span class="chip">report_wrong_item</span><span class="chip">report_empty_bin</span></div>
     <span class="arrowr" data-in="2.0">→</span>
     <div class="card phase" data-in="2.2"><h4>Complete</h4><span class="chip">end_shift</span></div>
   </div>
-  <div class="row" style="gap: 12px" data-in="2.6"><span class="chip">shift_status</span><span class="chip">pause_shift → resume_shift</span><span class="chip hold">call_supervisor</span><span style="font-size: 22px; color: var(--muted); align-self: center">available throughout</span></div>
-  <div class="card callout" data-in="5.2"><span class="big">🔒</span><div><b>session.update swaps the prompt and tools on every transition.</b> confirm_pick doesn't exist until the slot is verified, so Tote can't log a pick at the wrong slot.</div></div>
-  <div class="card callout" data-in="9.6"><span class="big">🔢</span><div><b>The model picks the intent; code reads the value.</b> Check digits and counts are parsed from the Universal-3 Pro transcript, never generated by the LLM. A check digit can't be hallucinated.</div></div>
+  <div class="card callout" data-in="3.4"><span class="big">🔢</span><div><b>The model picks the intent; code reads the value.</b> Check digits and counts are parsed from the transcript, never generated by the LLM, so a check digit can't be hallucinated.</div></div>
+  <div class="card callout" data-in="6.4"><span class="big">🛡️</span><div><b>A guardrail for when the model skips the check.</b> If a reply to "seven six" arrives without a tool call, the state machine runs the check itself and Tote corrects the instruction.</div></div>
 </section>
 
-<!-- 7 · latency -->
-<section class="slide" id="s7">
-  <span class="kicker" data-in="0.1">Measured on the live API</span>
-  <h2 data-in="0.3">From end of speech to Tote's voice: 3.96 s → 1.6 s.</h2>
-  <div class="bars2" style="margin-top: 30px">
-    <div class="bar" data-in="1.2"><span>Default adaptive turn-taking</span><div class="track"><div class="fill" style="width: 100%"></div></div><b>3.96 s</b></div>
-    <div class="bar" data-in="2.2"><span>+ value-free tools</span><div class="track"><div class="fill" style="width: 96%"></div></div><b>3.81 s</b></div>
-    <div class="bar" data-in="3.4"><span>+ pinned end-of-turn window</span><div class="track"><div class="fill win" style="width: 40%"></div></div><b style="color: var(--brand-ink)">1.60 s</b></div>
-  </div>
-  <p class="lede" data-in="4.6" style="margin-top: 20px">Median over full recorded shifts (scripts/drive.ts). The adaptive window had stretched to about 3 s because pickers go quiet while they walk between slots. <span class="mono" style="font-size: 24px">min_silence 250 · max_silence 900</span></p>
-</section>
-
-<!-- 8 · business -->
+<!-- 8 · measured -->
 <section class="slide" id="s8">
+  <span class="kicker" data-in="0.1">Measured, not claimed</span>
+  <h2 data-in="0.3">Full shifts against the live API, reproducible with one command.</h2>
+  <div class="row" style="gap: 20px; align-items: stretch">
+    <div class="card" style="flex: 1.35; padding: 22px 26px" data-in="0.8">
+      <table class="score" id="scoretable"><thead><tr><th>Run</th><th>Lines right</th><th>Misread digits</th><th>p50 to voice</th><th>1st verified pick</th></tr></thead><tbody></tbody></table>
+      <div class="src" style="margin-top: 10px">node scripts/drive.ts · synthesized pickers, WRONG=1 misreads one check digit · noisy = hum + forklift beeps at about -24 dBFS, far-field on</div>
+    </div>
+    <div style="flex: 1; display: flex; flex-direction: column; gap: 16px">
+      <div class="card kpi" data-in="1.6"><span class="v">3.96 → 1.60 s</span><span class="l">speech end → Tote's voice, median. The adaptive end-of-turn window had stretched while pickers walked.</span></div>
+      <div class="card kpi" data-in="2.2"><span class="v">9 / 9</span><span class="l">check-digit reads re-found by the post-shift Universal-3 Pro pass (demo shift)</span></div>
+      <div class="card kpi" data-in="2.8"><span class="v">≈ $0.03</span><span class="l">per picked line at $4.50 per session-hour list price (3.2 min, 8-line tote)</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- 9 · business -->
+<section class="slide" id="s9">
   <span class="kicker" data-in="0.1">Business value</span>
-  <h2 data-in="0.3">Faster onboarding, fewer wrong picks, a record of every pick.</h2>
+  <h2 data-in="0.3">Faster onboarding, fewer wrong picks, a safer floor, a record of every pick.</h2>
   <div class="row">
     <div class="card kpi" data-in="0.8"><span class="v">$3.0B</span><span class="l">voice picking solution market, 2025<br /><span class="src">Grand View Research</span></span></div>
-    <div class="card kpi" data-in="1.2"><span class="v">0 min</span><span class="l">voice-template training. A new picker starts on day one.</span></div>
-    <div class="card kpi" data-in="1.6"><span class="v">6 / 18</span><span class="l">languages Tote speaks / understands, with code-switching</span></div>
+    <div class="card kpi" data-in="1.1"><span class="v">≈ $0.03</span><span class="l">voice cost per picked line, measured at the $4.50 / session-hour list price</span></div>
+    <div class="card kpi" data-in="1.4"><span class="v">0 min</span><span class="l">voice-template training. A new picker verifies their first slot in about 10 s.</span></div>
+    <div class="card kpi" data-in="1.7"><span class="v">6</span><span class="l">headset languages, measured end to end in the scorecard</span></div>
   </div>
   <div class="row" style="gap: 48px" data-in="2.2">
     <ul class="list grow">
       <li><b>Buyers:</b> 3PLs, e-commerce DCs, grocery micro-fulfillment</li>
-      <li><b>Model:</b> per active headset per month, usage-based voice</li>
-      <li><b>Wedge:</b> runs in a browser on hardware sites already own</li>
+      <li><b>Model:</b> per active headset, usage-based voice cost passed through</li>
+      <li><b>Wedge:</b> a browser tab on hardware sites already own; no enrollment</li>
     </ul>
     <ul class="list grow">
       <li>Wrong slot rejected <b>before</b> the pick, not at pack-out</li>
-      <li>Shorts and damage become tasks in real time</li>
-      <li>Every pick backed by the session recording and timeline</li>
+      <li>Shorts, damage and hazards become tasks the moment they're spoken</li>
+      <li>Every pick backed by the recording and a second transcript</li>
     </ul>
   </div>
 </section>
 
-<!-- 9 · next + links -->
-<section class="slide" id="s9">
+<!-- 10 · honest limits -->
+<section class="slide" id="s10">
+  <span class="kicker" data-in="0.1">Honest limits</span>
+  <h2 data-in="0.3">What this build is, and what it isn't yet.</h2>
+  <div class="row" style="gap: 20px">
+    <ul class="list grow" data-in="0.8">
+      <li>The warehouse is a seeded simulation: no WMS connector yet</li>
+      <li>Recorded demo voices are synthesized; the live app takes any mic</li>
+      <li>1.6 s to voice is slower than a legacy system's beep, so Tote plays an instant "heard you" tick</li>
+    </ul>
+    <ul class="list grow" data-in="1.2">
+      <li>Our account has no LLM Gateway access, so shift notes are rule-based</li>
+      <li>Session pricing means scoping sessions to active picking, not whole shifts</li>
+      <li>One picker in the demo; the desk agent is built to take several</li>
+    </ul>
+  </div>
+</section>
+
+<!-- 11 · next + links -->
+<section class="slide" id="s11">
   <div class="logo" data-in="0.1"><img src="/icon-180.png" alt="" /><b>tote</b></div>
   <h2 data-in="0.3">Hands free. Eyes on the shelf.</h2>
   <div class="row" style="gap: 48px; align-items: flex-start">
@@ -286,9 +317,9 @@
 <script>
   // Scenes for the demo video: which slide shows when, and for how long.
   const SCENES = {
-    intro: { dur: 28, cuts: [['s1', 0], ['s2', 9.0], ['s3', 17.8]] },
-    tech: { dur: 34, cuts: [['s5', 0], ['s6', 8.4], ['s7', 24.0]] },
-    outro: { dur: 12.5, cuts: [['s8', 0], ['s9', 5.6]] },
+    intro: { dur: 19, cuts: [['s1', 0], ['s2', 2.0], ['s3', 9.8]] },
+    tech: { dur: 33, cuts: [['s5', 0], ['s7', 8.4], ['s8', 19.6]] },
+    outro: { dur: 7.5, cuts: [['s11', 0]] },
   }
   const q = new URLSearchParams(location.search)
   const scene = SCENES[q.get('scene')]
@@ -308,6 +339,28 @@
       f.style.transform = `scaleX(${p})`
     })
   }
+  // The scorecard slide reads the real run files.
+  const scoreReady = fetch('/video/scorecard/all.json').then((r) => (r.ok ? r.json() : [])).then((rows) => {
+    const tb = document.querySelector('#scoretable tbody')
+    for (const r of rows) {
+      const tr = document.createElement('tr')
+      const cells = [
+        `${r.language.toUpperCase()}${r.noisy ? ' · noisy' : ''}`,
+        `${r.lines_correct}/${r.lines_total}`,
+        r.wrong_slot_rejected === null ? '—' : r.wrong_slot_rejected ? 'rejected' : 're-asked',
+        r.latency_p50_ms ? `${(r.latency_p50_ms / 1000).toFixed(2)} s` : '—',
+        r.first_verified_pick_s !== null ? `${r.first_verified_pick_s} s` : '—',
+      ]
+      cells.forEach((c, i) => {
+        const td = document.createElement('td')
+        td.textContent = c
+        if (i === 1) td.className = r.lines_correct === r.lines_total ? 'ok' : 'bad'
+        if (i === 2 && r.wrong_slot_rejected !== null) td.className = 'ok'
+        tr.append(td)
+      })
+      tb.append(tr)
+    }
+  }).catch(() => {})
   if (scene) {
     document.body.classList.add('scene')
     window.FPS = FPS
@@ -318,9 +371,9 @@
       for (const c of scene.cuts) if (t >= c[1]) cur = c
       show(cur[0], t - cur[1])
     }
-    document.fonts.ready.then(() => Promise.all([...document.images].map((i) => i.complete || new Promise((r) => (i.onload = i.onerror = r))))).then(() => (window.READY = true))
+    Promise.all([scoreReady, document.fonts.ready.then(() => Promise.all([...document.images].map((i) => i.complete || new Promise((r) => (i.onload = i.onerror = r)))))]).then(() => (window.READY = true))
   } else {
-    window.READY = true
+    scoreReady.then(() => (window.READY = true))
   }
 </script>
 </body>

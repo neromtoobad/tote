@@ -43,16 +43,16 @@ const DIGIT_WORDS: Record<LangKey, string[]> = {
 const PHRASES: Record<LangKey, Record<string, string>> = {
   en: { ready: 'Ready.', got: 'Got them.', got1: 'Got it.', last: 'Done.', short: 'Only three here.', damaged: "Hmm, this one's damaged.", status: 'How am I doing?', end: "That's it. End my shift.", brk: 'I need a quick break.', back: "Okay, I'm back." },
   es: { ready: 'Listo.', got: 'Ya los tengo.', short: 'Solo hay {n}.', damaged: 'Este está dañado.', status: '¿Cómo voy?', end: 'Terminar turno.' },
-  de: { ready: 'Bereit.', got: 'Hab sie.', short: 'Nur {n} da.', damaged: 'Der ist beschädigt.', status: 'Wie stehe ich?', end: 'Schicht beenden.' },
+  de: { ready: 'Bereit.', got: 'Erledigt.', short: 'Nur {n} da.', damaged: 'Der ist beschädigt.', status: 'Wie stehe ich?', end: 'Schicht beenden.' },
   fr: { ready: 'Prêt.', got: "C'est bon.", short: 'Seulement {n}.', damaged: 'Celui-ci est abîmé.', status: 'Où j’en suis ?', end: 'Fin de poste.' },
   it: { ready: 'Pronto.', got: 'Presi.', short: 'Solo {n}.', damaged: 'Questo è danneggiato.', status: 'Come sto andando?', end: 'Fine turno.' },
-  pt: { ready: 'Pronto.', got: 'Já tenho.', short: 'Só há {n}.', damaged: 'Este está danificado.', status: 'Como estou?', end: 'Terminar turno.' },
+  pt: { ready: 'Pronto.', got: 'Já tenho.', short: 'Só há três.', damaged: 'Este está danificado.', status: 'Como estou?', end: 'Terminar turno.' },
 }
 const VOICE: Record<LangKey, string> = { en: 'Samantha', es: 'Paulina', de: 'Anna', fr: 'Thomas', it: 'Alice', pt: 'Joana' }
 
 // Pre-voiced lines (video/voice/lines.json) win over macOS `say` when present.
 const VOICE_DIR = path.join(ROOT, 'video', 'voice')
-const VOICED: Record<string, string> = LANG === 'en' && fs.existsSync(path.join(VOICE_DIR, 'lines.json')) ? JSON.parse(fs.readFileSync(path.join(VOICE_DIR, 'lines.json'), 'utf8')) : {}
+const VOICED: Record<string, string> = fs.existsSync(path.join(VOICE_DIR, 'lines.json')) ? JSON.parse(fs.readFileSync(path.join(VOICE_DIR, 'lines.json'), 'utf8')) : {}
 
 function tts(text: string): Buffer {
   if (VOICED[text]) {
@@ -83,6 +83,7 @@ const ts = () => `${((Date.now() - t0) / 1000).toFixed(1).padStart(5)}s`
 const out = (who: string, text: string) => console.log(`${ts()}  ${who.padEnd(6)} ${text}`)
 
 const shift = new Shift(LANG)
+if (process.env.NOISE === '1') shift.setFarField(true)
 const env = process.env
 shift.tuning = {
   ...(env.LEGACY === '1' ? {} : shift.tuning),
@@ -114,6 +115,30 @@ shift.port = {
   end: () => agent.end(),
 }
 
+// NOISE=1: a warehouse floor under everything Sam says (hum + forklift beeps),
+// normalised to about -24 dBFS, with server-side far-field isolation on.
+const NOISE = process.env.NOISE === '1'
+let noise: Int16Array | null = null
+let noisePos = 0
+if (NOISE) {
+  const raw = fs.readFileSync(path.join(ROOT, 'video', 'noise', 'floor.pcm'))
+  const n = new Int16Array(raw.buffer, raw.byteOffset, raw.byteLength / 2)
+  let sum = 0
+  for (let i = 0; i < n.length; i += 7) sum += n[i] * n[i]
+  const rms = Math.sqrt(sum / (n.length / 7)) / 32768
+  const k = 0.063 / (rms || 1)
+  noise = Int16Array.from(n, (v) => Math.max(-32768, Math.min(32767, Math.round(v * k))))
+}
+function withNoise(chunk: Buffer): Buffer {
+  if (!noise) return chunk
+  const out = Buffer.alloc(chunk.length)
+  for (let i = 0; i < chunk.length / 2; i++) {
+    const v = chunk.readInt16LE(i * 2) + noise[noisePos++ % noise.length]
+    out.writeInt16LE(Math.max(-32768, Math.min(32767, v)), i * 2)
+  }
+  return out
+}
+
 // --- mic simulator: continuous real-time stream, speech spliced into silence ---
 let speech: Buffer | null = null
 let speechPos = 0
@@ -126,7 +151,7 @@ const mic = setInterval(() => {
     if (chunk.length < CHUNK * 2) chunk = Buffer.concat([chunk, silence.subarray(chunk.length)])
     if (speechPos >= speech.length) speech = null
   }
-  agent.sendAudio(chunk.toString('base64'))
+  agent.sendAudio(withNoise(chunk).toString('base64'))
 }, 50)
 
 function speak(text: string) {
@@ -294,9 +319,39 @@ function finish() {
   console.log('tasks:', s.tasks.map((t) => `${t.id} ${t.text}`).join(' | ') || 'none')
   console.log(`latency p50 ${lat[Math.floor(lat.length / 2)] ?? '-'} ms, max ${lat[lat.length - 1] ?? '-'} ms, n=${lat.length}`)
   console.log('session', agent.sessionId)
+  writeScore(s, lat)
   fs.writeFileSync(path.join(TMP, 'result.json'), JSON.stringify({ session: agent.sessionId, lines: s.lines, log: s.log, latencies: s.latencies }, null, 2))
   console.log('saved', path.join(TMP, 'result.json'))
   void saveTape(s).finally(() => setTimeout(() => process.exit(0), 300))
+}
+
+// The expected end state of the seeded shift, line by line.
+const EXPECT: Record<string, [string, number]> = { L1: ['picked', 2], L2: ['short', 3], R1: ['picked', 1], R2: ['picked', 2], L3: ['picked', 1], L4: ['damaged', 0], L5: ['picked', 3], L6: ['picked', 2] }
+function writeScore(s: ReturnType<typeof shift.getSnapshot>, lat: number[]) {
+  const correct = s.lines.filter((l) => EXPECT[l.id] && EXPECT[l.id][0] === l.status && EXPECT[l.id][1] === l.picked).length
+  const l3 = s.lines.find((l) => l.id === 'L3')
+  const start = s.log.find((e) => e.kind === 'start')?.t ?? 0
+  const firstVerify = s.log.find((e) => e.kind === 'verify')?.t
+  const score = {
+    run: process.env.TAPE ?? `${LANG}${NOISE ? '-noisy' : ''}`,
+    language: LANG,
+    noisy: NOISE,
+    lines_correct: correct,
+    lines_total: Object.keys(EXPECT).length,
+    wrong_slot_rejected: WRONG ? Number((l3?.mismatches ?? 0) >= 1) : null,
+    // No mismatch logged but the line was picked: the misread came through as one digit and Tote asked again.
+    misread_reasked: WRONG ? Number((l3?.mismatches ?? 0) === 0 && l3?.status === 'picked') : null,
+    guard_corrections: s.log.filter((e) => e.kind === 'guard').length,
+    latency_p50_ms: lat[Math.floor(lat.length / 2)] ?? null,
+    latency_p95_ms: lat[Math.min(lat.length - 1, Math.floor(lat.length * 0.95))] ?? null,
+    turns: lat.length,
+    first_verified_pick_s: firstVerify !== undefined ? Math.round((firstVerify - start) / 100) / 10 : null,
+    session: agent.sessionId,
+  }
+  const dir = path.join(ROOT, 'video', 'scorecard')
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, `${score.run}.json`), JSON.stringify(score, null, 2))
+  console.log('SCORE', JSON.stringify(score))
 }
 
 async function saveTape(s: ReturnType<typeof shift.getSnapshot>) {

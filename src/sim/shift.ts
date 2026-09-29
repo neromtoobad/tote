@@ -58,7 +58,7 @@ export const LANGS: Record<LangKey, { label: string; flag: string; voice: string
     label: 'Español',
     flag: '🇪🇸',
     voice: 'lola',
-    codes: ['es', 'en'],
+    codes: ['es'],
     line: 'Speak only Spanish, even though tool results are in English. Say aisle letters in Spanish ("pasillo B").',
     greeting: (n) => `Buenos días, Sam. Tote diez cuarenta y dos, ${n} líneas. Di listo para empezar.`,
   },
@@ -66,7 +66,7 @@ export const LANGS: Record<LangKey, { label: string; flag: string; voice: string
     label: 'Deutsch',
     flag: '🇩🇪',
     voice: 'juergen',
-    codes: ['de', 'en'],
+    codes: ['de'],
     line: 'Speak only German, even though tool results are in English.',
     greeting: (n) => `Guten Morgen, Sam. Tote zehn zweiundvierzig, ${n} Positionen. Sag bereit, wenn du startklar bist.`,
   },
@@ -74,7 +74,7 @@ export const LANGS: Record<LangKey, { label: string; flag: string; voice: string
     label: 'Français',
     flag: '🇫🇷',
     voice: 'estelle',
-    codes: ['fr', 'en'],
+    codes: ['fr'],
     line: 'Speak only French, even though tool results are in English.',
     greeting: (n) => `Bonjour Sam. Bac dix quarante-deux, ${n} lignes. Dis prêt quand tu veux.`,
   },
@@ -82,7 +82,7 @@ export const LANGS: Record<LangKey, { label: string; flag: string; voice: string
     label: 'Italiano',
     flag: '🇮🇹',
     voice: 'giovanni',
-    codes: ['it', 'en'],
+    codes: ['it'],
     line: 'Speak only Italian, even though tool results are in English.',
     greeting: (n) => `Buongiorno Sam. Contenitore dieci quarantadue, ${n} righe. Di pronto quando vuoi.`,
   },
@@ -90,7 +90,7 @@ export const LANGS: Record<LangKey, { label: string; flag: string; voice: string
     label: 'Português',
     flag: '🇵🇹',
     voice: 'rafael',
-    codes: ['pt', 'en'],
+    codes: ['pt'],
     line: 'Speak only Portuguese, even though tool results are in English.',
     greeting: (n) => `Bom dia, Sam. Caixa dez quarenta e dois, ${n} linhas. Diz pronto quando quiseres.`,
   },
@@ -287,6 +287,12 @@ function plain(t: ToolDef): ToolDef {
   )
   return { ...t, parameters: { ...t.parameters, properties: stripped } }
 }
+
+/** Words that mean "skip this slot" across the six headset languages. */
+const SKIP_WORDS = ['skip', 'block', "can't find", 'cant find', 'cannot find', 'missing', 'unsafe', 'pallet', 'forklift', 'saltar', 'bloque', 'no encuentro', 'überspring', 'blockiert', 'finde', 'passer', 'bloqué', 'trouve pas', 'salta', 'bloccat', 'non trovo', 'pular', 'não encontro', 'nao encontro']
+
+/** Words that mean "I picked it" across the six headset languages. */
+const PICK_WORDS = ['got', 'done', 'picked', 'have them', 'all of them', 'only', 'just', 'grabbed', 'listo', 'tengo', 'ya está', 'solo', 'erledigt', 'hab', 'fertig', 'nur', 'fait', 'pris', 'bon', 'seulement', 'presi', 'fatto', 'solo', 'feito', 'tenho', 'só']
 
 export type Tuning = {
   staticPrompt?: boolean
@@ -852,7 +858,7 @@ ${state}`
       else if (mentions(userText, ['wrong'])) tool = 'report_wrong_item'
       // Only explicit pick language: bare numbers here are often the next
       // slot's check digits said early, and the model is right to wait.
-      else if (mentions(userText, ['got', 'done', 'picked', 'have them', 'all of them', 'only', 'just', 'grabbed'])) tool = 'confirm_pick'
+      else if (mentions(userText, PICK_WORDS)) tool = 'confirm_pick'
     }
     if (!tool) return
     if (!this.heardSinceTool.length) this.heardSinceTool = [userText]
@@ -902,6 +908,11 @@ ${state}`
       case 'report_empty_bin':
         return this.run('report_exception', { kind: 'empty_bin' }, callId)
       case 'skip_location':
+        // Skipping loses a pick, so only the picker's own words can trigger it.
+        if (!mentions(said, SKIP_WORDS)) {
+          this.heardSinceTool = [said]
+          return this.outcome({ skipped: false, heard: said, say: 'I did not catch that. Read the two check digits, or say skip.' })
+        }
         return this.run(
           'skip_location',
           { reason: mentions(said, ['block', 'pallet', 'forklift']) ? 'blocked' : mentions(said, ['find', 'where', 'missing']) ? 'cannot_find' : mentions(said, ['unsafe', 'danger', 'high', 'ladder']) ? 'unsafe' : 'other' },

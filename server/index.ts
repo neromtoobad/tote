@@ -228,16 +228,37 @@ async function readAnalysis(id: string) {
     utterances?: Utt[]
     sentiment_analysis_results?: Sent[]
     auto_highlights_result?: { results?: { text: string; count: number; rank: number }[] }
+    words?: { channel?: string; start: number; end: number; text: string }[]
   }
   if (d.status !== 'completed') return { status: d.status, error: d.error }
-  const utts = d.utterances ?? []
+  // Rebuild phrases from word timings: the recognizer can merge a whole
+  // channel's speech into one long utterance, which would hide individual reads
+  // and count silence as talk.
   const who = (u: { channel?: string }) => (String(u.channel) === '1' ? 'picker' : 'agent')
-  const talk = { picker: 0, agent: 0 }
-  const words = { picker: 0, agent: 0 }
-  for (const u of utts) {
-    talk[who(u)] += (u.end - u.start) / 1000
-    words[who(u)] += u.text.split(/\s+/).filter(Boolean).length
+  const words = (d.words ?? []).slice().sort((a, b) => a.start - b.start)
+  const phrases: { who: 'picker' | 'agent'; at: number; end: number; text: string }[] = []
+  const open: Record<string, (typeof phrases)[number] | undefined> = {}
+  for (const w of words) {
+    const k = who(w)
+    const cur = open[k]
+    if (cur && w.start - cur.end < 700) {
+      cur.text += ` ${w.text}`
+      cur.end = w.end
+    } else {
+      const p = { who: k as 'picker' | 'agent', at: w.start, end: w.end, text: w.text }
+      phrases.push(p)
+      open[k] = p
+    }
   }
+  const utts = phrases.length ? phrases : (d.utterances ?? []).map((u) => ({ who: who(u), at: u.start, end: u.end, text: u.text }))
+  const talk = { picker: 0, agent: 0 }
+  const count = { picker: 0, agent: 0 }
+  for (const w of words) {
+    talk[who(w)] += (w.end - w.start) / 1000
+    count[who(w)]++
+  }
+  if (!words.length) for (const u of utts) talk[u.who] += (u.end - u.at) / 1000
+  const wordsBy = count
   const sentiment = (d.sentiment_analysis_results ?? [])
     .filter((x) => who(x) === 'picker')
     .map((x) => ({ at: x.start, sentiment: x.sentiment, text: x.text }))
@@ -247,8 +268,8 @@ async function readAnalysis(id: string) {
     duration: d.audio_duration ?? 0,
     talk,
     wpm: {
-      picker: talk.picker ? Math.round((words.picker / talk.picker) * 60) : 0,
-      agent: talk.agent ? Math.round((words.agent / talk.agent) * 60) : 0,
+      picker: talk.picker ? Math.round((wordsBy.picker / talk.picker) * 60) : 0,
+      agent: talk.agent ? Math.round((wordsBy.agent / talk.agent) * 60) : 0,
     },
     sentiment,
     highlights: (d.auto_highlights_result?.results ?? [])
@@ -256,7 +277,7 @@ async function readAnalysis(id: string) {
       .sort((a, b) => b.rank - a.rank)
       .slice(0, 8)
       .map((h) => h.text),
-    utterances: utts.map((u) => ({ who: who(u), at: u.start, text: u.text })),
+    utterances: utts.map((u) => ({ who: u.who, at: u.at, text: u.text })),
   }
 }
 

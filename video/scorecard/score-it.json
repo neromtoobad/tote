@@ -1,0 +1,15 @@
+{
+  "run": "score-it",
+  "language": "it",
+  "noisy": false,
+  "lines_correct": 8,
+  "lines_total": 8,
+  "wrong_slot_rejected": 1,
+  "misread_reasked": 0,
+  "guard_corrections": 0,
+  "latency_p50_ms": 1741,
+  "latency_p95_ms": 2054,
+  "turns": 20,
+  "first_verified_pick_s": 7,
+  "session": "sess_eab3616be4254fed87d07ebeb6d1246a"
+}
