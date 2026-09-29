@@ -1009,7 +1009,7 @@ ${state}`
 
       case 'end_shift': {
         this.log('end', 'Shift ended by picker')
-        this.later(3500, () => this.port?.end())
+        this.later(5500, () => this.port?.end())
         return this.outcome({ ended: true, say: 'Shift closed. Nice work, Sam.' })
       }
     }
