@@ -1,3 +1,4 @@
+import { every } from '../clock'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { LANGS, metrics, type Line, type Snapshot } from '../sim/shift'
 import { bayX, checkDigits, code, rackY, spoken, FLOOR, STAGE_X } from '../sim/warehouse'
@@ -15,8 +16,7 @@ const fmt = (ms: number) => {
 export function Kpis({ s }: { s: Snapshot }) {
   const [, tick] = useState(0)
   useEffect(() => {
-    const t = setInterval(() => tick((n) => n + 1), 1000)
-    return () => clearInterval(t)
+    return every(() => tick((n) => n + 1), 1000)
   }, [])
   const m = metrics(s)
   const tiles: { lbl: string; val: ReactNode; sub: string; pill?: ReactNode }[] = [
@@ -344,12 +344,12 @@ export function spokenLoc(line?: Line) {
 }
 
 // --- Sam, staged on the right of the floor card --------------------------------------
-export function SamStage({ s }: { s: Snapshot }) {
+export function SamStage({ s, speaking }: { s: Snapshot; speaking?: string }) {
   const now = useNow(400)
   const pose = poseFor(s, false, now)
   const line = s.lines[s.active]
   const idx = s.active + 1
-  const recent = s.lastHeard
+  const recent = speaking ?? s.lastHeard
   return (
     <div className="stage" style={{ left: `${(STAGE_X / FLOOR.w) * 100}%`, width: `${((FLOOR.w - STAGE_X) / FLOOR.w) * 100}%` }}>
       <div className="stage-h">

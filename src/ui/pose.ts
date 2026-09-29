@@ -1,3 +1,4 @@
+import { every, now as clockNow } from '../clock'
 import { useEffect, useState } from 'react'
 import type { Snapshot } from '../sim/shift'
 
@@ -6,7 +7,7 @@ export type Pose = 'walk' | 'read' | 'lift' | 'damaged' | 'break' | 'done'
 const EXCEPTION = new Set(['damaged', 'short', 'empty', 'wrong_item', 'mismatch'])
 
 /** Every pose maps to something real in the shift, never decoration. */
-export function poseFor(s: Snapshot, onMap = false, now = Date.now()): Pose {
+export function poseFor(s: Snapshot, onMap = false, now = clockNow()): Pose {
   const last = s.log[s.log.length - 1]
   const lastAt = last && s.startedAt ? s.startedAt + last.t : 0
   if (last && EXCEPTION.has(last.kind) && now - lastAt < 4500) return 'damaged'
@@ -37,10 +38,9 @@ export const POSE_CAPTION: Record<Pose, string> = {
 
 /** Re-render on a clock, for poses that expire (exception flashes, arrivals). */
 export function useNow(ms = 500) {
-  const [now, setNow] = useState(() => Date.now())
+  const [now, setNow] = useState(() => clockNow())
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), ms)
-    return () => clearInterval(t)
+    return every(() => setNow(clockNow()), ms)
   }, [ms])
   return now
 }

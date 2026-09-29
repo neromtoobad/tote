@@ -1,3 +1,4 @@
+import { later as clockLater, now as clockNow } from '../clock.ts'
 // The shift state machine. Each phase owns a narrow system prompt and a small
 // tool list, pushed to the agent with session.update on every transition
 // ("progressive tool reveal"): the agent cannot confirm a pick before the
@@ -254,7 +255,7 @@ export class Shift {
   }
   private snap: Snapshot
   private subs = new Set<() => void>()
-  private timers: ReturnType<typeof setTimeout>[] = []
+  private timers: (() => void)[] = []
   port: AgentPort | null = null
 
   constructor(lang: LangKey = 'en') {
@@ -298,7 +299,7 @@ export class Shift {
   }
 
   dispose() {
-    this.timers.forEach(clearTimeout)
+    this.timers.forEach((cancel) => cancel())
     this.timers = []
   }
 
@@ -326,7 +327,7 @@ export class Shift {
     return this.s.lines[this.s.active]
   }
   private now() {
-    return Date.now()
+    return clockNow()
   }
   private rel() {
     return this.s.startedAt ? this.now() - this.s.startedAt : 0
@@ -493,7 +494,7 @@ ${state}`
   }
 
   private later(ms: number, fn: () => void) {
-    this.timers.push(setTimeout(fn, ms))
+    this.timers.push(clockLater(fn, ms))
   }
 
   // One gentle prompt if a picker stands at the slot saying nothing.
@@ -799,7 +800,7 @@ ${state}`
 }
 
 // --- metrics --------------------------------------------------------------------
-export function metrics(s: Snapshot, now = Date.now()) {
+export function metrics(s: Snapshot, now = clockNow()) {
   const total = s.lines.length
   const closed = s.lines.filter((l) => ['picked', 'short', 'damaged', 'skipped'].includes(l.status))
   const done = closed.length

@@ -1,3 +1,4 @@
+import { now as clockNow, onFrame } from '../clock'
 import { useEffect, useRef } from 'react'
 import type { Line, Snapshot, Walk } from '../sim/shift'
 import { poseFor, useNow } from './pose'
@@ -46,10 +47,9 @@ export function FloorMap({ s, agent }: { s: Snapshot; agent: AgentStatus }) {
   walkRef.current = s.walk
 
   useEffect(() => {
-    let raf = 0
     const frame = () => {
       const w = walkRef.current
-      const now = Date.now()
+      const now = clockNow()
       const p = posAt(w, now)
       pickerRef.current?.setAttribute('transform', `translate(${p.x} ${p.y})`)
       // Face the direction of travel (the sprites face right).
@@ -73,10 +73,8 @@ export function FloorMap({ s, agent }: { s: Snapshot; agent: AgentStatus }) {
           routeRef.current.setAttribute('points', ahead.map((q) => `${q.x},${q.y}`).join(' '))
         }
       }
-      raf = requestAnimationFrame(frame)
     }
-    raf = requestAnimationFrame(frame)
-    return () => cancelAnimationFrame(raf)
+    return onFrame(frame)
   }, [])
 
   const pinFor = (l: Line) => ({ x: bayX(l.loc.bay), y: rackY(l.loc.aisle) + RACK.depth / 2 })

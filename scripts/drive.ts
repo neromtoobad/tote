@@ -58,7 +58,15 @@ function tts(text: string): Buffer {
   return fs.readFileSync(raw)
 }
 
-const t0 = Date.now()
+let t0 = Date.now()
+// The tape: every server message with its arrival time, plus both audio tracks,
+// so scripts/replay can re-render this exact session frame by frame.
+const TAPE_DIR = process.env.TAPE ? path.join(ROOT, 'video', 'tapes', process.env.TAPE) : null
+const tape: { lang: LangKey; events: Record<string, unknown>[]; report?: unknown; session?: string | null } = { lang: LANG, events: [] }
+const agentPcm: Buffer[] = []
+const samPcm: Buffer[] = []
+let agentBytes = 0
+let samBytes = 0
 const ts = () => `${((Date.now() - t0) / 1000).toFixed(1).padStart(5)}s`
 const out = (who: string, text: string) => console.log(`${ts()}  ${who.padEnd(6)} ${text}`)
 
@@ -93,6 +101,9 @@ function speak(text: string) {
   out('SAM', text)
   speech = tts(text)
   speechPos = 0
+  tape.events.push({ t: Date.now() - t0 + 25, sam: text, off: samBytes, len: speech.length })
+  samPcm.push(speech)
+  samBytes += speech.length
 }
 
 // --- when the agent has finished talking, decide what Sam says next -------------
@@ -161,6 +172,15 @@ agent.on('wire', (e) => {
     out(e.dir === 'up' ? '  ↑' : '  ↓', `${e.type}${e.detail ? ` · ${e.detail.slice(0, 110)}` : ''}`)
 })
 agent.on('ready', (id) => out('READY', id))
+agent.on('raw', (msg) => {
+  const t = Date.now() - t0
+  if (msg.type === 'reply.audio') {
+    const b = Buffer.from(String(msg.data), 'base64')
+    tape.events.push({ t, msg: { type: 'reply.audio', data: '' }, off: agentBytes, len: b.length })
+    agentPcm.push(b)
+    agentBytes += b.length
+  } else tape.events.push({ t, msg })
+})
 agent.on('user', (_, text) => {
   shift.heard(text)
   out('heard', `“${text}”`)
@@ -198,7 +218,37 @@ function finish() {
   console.log('session', agent.sessionId)
   fs.writeFileSync(path.join(TMP, 'result.json'), JSON.stringify({ session: agent.sessionId, lines: s.lines, log: s.log, latencies: s.latencies }, null, 2))
   console.log('saved', path.join(TMP, 'result.json'))
-  setTimeout(() => process.exit(0), 300)
+  void saveTape(s).finally(() => setTimeout(() => process.exit(0), 300))
+}
+
+async function saveTape(s: ReturnType<typeof shift.getSnapshot>) {
+  if (!TAPE_DIR) return
+  fs.mkdirSync(TAPE_DIR, { recursive: true })
+  tape.session = agent.sessionId
+  try {
+    const res = await fetch(process.env.REPORT_URL ?? 'http://localhost:8787/api/report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: agent.sessionId,
+        log: {
+          tote: 'T-1042',
+          language: LANG,
+          lines: s.lines.map((l) => ({ order: l.order, slot: code(l.loc), item: l.item.name, qty: l.qty, picked: l.picked, status: l.status, check_digit_rejections: l.mismatches, rush: Boolean(l.rush) })),
+          tasks: s.tasks,
+          events: s.log,
+        },
+      }),
+    })
+    tape.report = await res.json()
+    console.log('report', res.status)
+  } catch (e) {
+    console.log('report skipped:', (e as Error).message)
+  }
+  fs.writeFileSync(path.join(TAPE_DIR, 'tape.json'), JSON.stringify(tape))
+  fs.writeFileSync(path.join(TAPE_DIR, 'agent.pcm'), Buffer.concat(agentPcm))
+  fs.writeFileSync(path.join(TAPE_DIR, 'sam.pcm'), Buffer.concat(samPcm))
+  console.log('tape saved to', TAPE_DIR, `${tape.events.length} events`)
 }
 setTimeout(() => {
   out('TIMEOUT', 'ending session')
@@ -213,4 +263,5 @@ url.searchParams.set('max_session_duration_seconds', '600')
 const res = await fetch(url, { headers: { Authorization: `Bearer ${KEY}` } })
 if (!res.ok) throw new Error(`token ${res.status} ${await res.text()}`)
 const { token } = (await res.json()) as { token: string }
+t0 = Date.now()
 agent.connect(token, shift.initialConfig())

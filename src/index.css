@@ -957,3 +957,38 @@ table.audit td {
   padding: 1px 6px;
   border-radius: 4px;
 }
+
+/* ---------- demo video caption (replay mode only) ---------- */
+.vcap {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  max-width: min(1100px, 86vw);
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 12px 20px;
+  border-radius: 14px;
+  background: rgba(22, 24, 29, 0.88);
+  color: #fff;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  box-shadow: var(--pop);
+  z-index: 30;
+}
+.vcap b {
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 6px;
+  flex: none;
+}
+.vcap b.u {
+  background: var(--ok);
+}
+.vcap b.a {
+  background: var(--brand);
+}

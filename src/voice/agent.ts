@@ -1,3 +1,4 @@
+import { now as clockNow } from '../clock.ts'
 // A small client for the AssemblyAI Voice Agent WebSocket.
 // It runs unchanged in the browser and in Node 22+ (global WebSocket), which
 // is how scripts/drive.ts rehearses whole shifts with synthesized speech.
@@ -51,6 +52,8 @@ type Listeners = {
   userSpeaking: (on: boolean) => void
   latency: (ms: number) => void
   ended: (info: { sessionSeconds?: number; audioSeconds?: number | null }) => void
+  /** Every server message as received, before handling (used to record demo tapes). */
+  raw: (msg: Record<string, unknown>) => void
 }
 
 type Pending = { callId: string; name: string; outcome: ToolOutcome }
@@ -95,7 +98,7 @@ export class VoiceAgent {
   }
 
   private wire(dir: 'up' | 'down', type: string, detail?: string) {
-    this.emit('wire', { dir, type, detail, at: Date.now() })
+    this.emit('wire', { dir, type, detail, at: clockNow() })
   }
 
   send(msg: Record<string, unknown>, detail?: string) {
@@ -118,6 +121,17 @@ export class VoiceAgent {
       this.ready = false
     }
     ws.onerror = () => this.setStatus('error', 'connection failed')
+  }
+
+  /** Replay a recorded session: no network, server messages come from inject(). */
+  attachReplay(config: SessionConfig) {
+    this.setStatus('connecting')
+    this.ws = { readyState: 1, send: () => {}, close: () => {} } as unknown as WebSocket
+    this.send({ type: 'session.update', session: config }, 'initial config')
+  }
+
+  inject(msg: Record<string, unknown>) {
+    void this.onMessage(msg as Record<string, any>)
   }
 
   sendAudio(b64: string) {
@@ -202,6 +216,7 @@ export class VoiceAgent {
   }
 
   private async onMessage(msg: Record<string, any>) {
+    this.emit('raw', msg)
     const t = String(msg.type)
     switch (t) {
       case 'session.ready':
@@ -223,7 +238,7 @@ export class VoiceAgent {
         break
       case 'input.speech.stopped':
         this.userSpeaking = false
-        this.speechStoppedAt = performance.now()
+        this.speechStoppedAt = clockNow()
         this.awaitingFirstAudio = true
         this.wire('down', t)
         this.emit('userSpeaking', false)
@@ -245,7 +260,7 @@ export class VoiceAgent {
       case 'reply.audio':
         if (this.awaitingFirstAudio && this.speechStoppedAt) {
           this.awaitingFirstAudio = false
-          this.emit('latency', Math.round(performance.now() - this.speechStoppedAt))
+          this.emit('latency', Math.round(clockNow() - this.speechStoppedAt))
         }
         this.emit('audio', this.decode(msg.data))
         break

@@ -1,3 +1,4 @@
+import { advanceTo, epoch, isVirtual, later, now as clockNow, onFrame } from './clock'
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { LANGS, Shift, type LangKey } from './sim/shift'
 import { batcher, fromBase64, openAudio, toBase64, type AudioIO } from './voice/audio'
@@ -7,6 +8,14 @@ import { Activity, Desk, Headset, Kpis, SamStage, SlotCard, Wire, type Caption }
 import { Report, type ReportData } from './ui/Report'
 
 const PHASES = ['briefing', 'travel', 'pick', 'complete'] as const
+
+type Tape = {
+  lang: LangKey
+  events: { t: number; msg?: Record<string, unknown>; sam?: string; len?: number }[]
+  report?: ReportData
+  tail?: number
+}
+let replayStarted = false
 const PHASE_LABEL: Record<string, string> = { briefing: 'Briefing', travel: 'Go to slot', pick: 'Pick', complete: 'Done' }
 
 function summarize(result: unknown): string {
@@ -28,6 +37,8 @@ export default function App() {
   const [captions, setCaptions] = useState<Caption[]>([])
   const [wire, setWire] = useState<WireEvent[]>([])
   const [report, setReport] = useState<{ open: boolean; data: ReportData | null; error: string | null }>({ open: false, data: null, error: null })
+  // Replay only: what Sam is saying right now (the audio leads the transcript).
+  const [samSays, setSamSays] = useState<{ text: string; at: number; ms: number } | null>(null)
   const agentRef = useRef<VoiceAgent | null>(null)
   const audioRef = useRef<AudioIO | null>(null)
   const orbRef = useRef<HTMLDivElement>(null)
@@ -46,7 +57,6 @@ export default function App() {
 
   // Drive the headset orb's ring from mic or speaker level without re-rendering.
   useEffect(() => {
-    let raf = 0
     const loop = () => {
       const st = statusRef.current
       const a = audioRef.current
@@ -54,10 +64,8 @@ export default function App() {
       if (a && st === 'speaking') lvl = Math.min(1, speakerLevel.current * 6)
       else if (a && (st === 'listening' || st === 'thinking')) lvl = Math.min(1, a.micLevel() * 9)
       orbRef.current?.style.setProperty('--lvl', lvl.toFixed(3))
-      raf = requestAnimationFrame(loop)
     }
-    raf = requestAnimationFrame(loop)
-    return () => cancelAnimationFrame(raf)
+    return onFrame(loop)
   }, [])
 
   const upsert = useCallback((id: string, patch: Partial<Caption> & { who: Caption['who'] }, append = false) => {
@@ -78,10 +86,11 @@ export default function App() {
   }, [])
 
   const finish = useCallback(
-    async (sh: Shift, sessionId: string | null) => {
+    async (sh: Shift, sessionId: string | null, recorded?: ReportData) => {
       await teardown()
       sh.endSession()
-      setReport({ open: true, data: null, error: null })
+      setReport({ open: true, data: recorded ?? null, error: null })
+      if (recorded) return
       try {
         const snap = sh.getSnapshot()
         const res = await fetch('/api/report', {
@@ -108,24 +117,9 @@ export default function App() {
     [teardown],
   )
 
-  const start = useCallback(async () => {
-    setCaptions([])
-    setWire([])
-    setDetail(undefined)
-    setReport({ open: false, data: null, error: null })
-    shift.dispose()
-    const sh = new Shift(lang)
-    sh.setFarField(farField)
-    setShift(sh)
-    setStatus('connecting')
-    try {
-      // Audio first, while the click still counts as a user gesture.
-      const audio = await openAudio()
-      audioRef.current = audio
-      const res = await fetch('/api/token')
-      const tok = await res.json()
-      if (!res.ok) throw new Error(tok.error ?? 'could not get a session token')
-
+  // Wire a shift to a fresh agent: the same path for a live mic and a replayed tape.
+  const bind = useCallback(
+    (sh: Shift, recorded?: ReportData) => {
       const agent = new VoiceAgent(sh.handleTool, fromBase64)
       agentRef.current = agent
       sh.port = {
@@ -140,7 +134,7 @@ export default function App() {
         if (d) setDetail(d)
         if ((st === 'ended' || st === 'error') && !ended) {
           ended = true
-          if (sh.getSnapshot().startedAt) void finish(sh, agent.sessionId)
+          if (sh.getSnapshot().startedAt) void finish(sh, agent.sessionId, recorded)
           else
             void teardown().then(() => {
               // Never got going: back to the intro, keeping the error visible.
@@ -170,6 +164,30 @@ export default function App() {
           return next
         }),
       )
+      return agent
+    },
+    [finish, teardown, upsert],
+  )
+
+  const start = useCallback(async () => {
+    setCaptions([])
+    setWire([])
+    setDetail(undefined)
+    setReport({ open: false, data: null, error: null })
+    shift.dispose()
+    const sh = new Shift(lang)
+    sh.setFarField(farField)
+    setShift(sh)
+    setStatus('connecting')
+    try {
+      // Audio first, while the click still counts as a user gesture.
+      const audio = await openAudio()
+      audioRef.current = audio
+      const res = await fetch('/api/token')
+      const tok = await res.json()
+      if (!res.ok) throw new Error(tok.error ?? 'could not get a session token')
+
+      const agent = bind(sh)
       audio.onSpeaker(({ level }) => (speakerLevel.current = level))
       audio.onChunk(batcher(1200, (pcm) => agent.sendAudio(toBase64(pcm))))
       agent.connect(tok.token, sh.initialConfig())
@@ -181,7 +199,49 @@ export default function App() {
       sh.dispose()
       setShift(new Shift(lang))
     }
-  }, [farField, finish, lang, shift, teardown, upsert])
+  }, [bind, farField, lang, shift, teardown])
+
+  // Demo-video mode: re-run a recorded shift through the real agent client and
+  // state machine on a virtual clock; the renderer calls renderFrame(n).
+  useEffect(() => {
+    if (!isVirtual || replayStarted) return
+    replayStarted = true
+    const q = new URLSearchParams(window.location.search)
+    void (async () => {
+      const tape = (await fetch(`/replay/${q.get('replay') || 'demo'}/tape.json`).then((r) => r.json())) as Tape
+      const fps = Number(q.get('fps') ?? 30)
+      const sh = new Shift(tape.lang)
+      setShift(sh)
+      const agent = bind(sh, tape.report)
+      for (const ev of tape.events) {
+        later(() => {
+          if (ev.msg) agent.inject(ev.msg)
+          else if (ev.sam) setSamSays({ text: ev.sam, at: clockNow(), ms: ((ev.len ?? 0) / 2 / 24_000) * 1000 })
+        }, ev.t)
+      }
+      agent.attachReplay(sh.initialConfig())
+      const t0 = epoch()
+      const last = tape.events[tape.events.length - 1]?.t ?? 0
+      const w = window as unknown as Record<string, unknown>
+      w.FPS = fps
+      w.TOTAL_FRAMES = Math.ceil(((last + (tape.tail ?? 9000)) / 1000) * fps)
+      w.renderFrame = async (n: number) => {
+        const t = (n * 1000) / fps
+        advanceTo(t0 + t)
+        await new Promise((r) => setTimeout(r, 0))
+        await new Promise((r) => setTimeout(r, 0))
+        for (const a of document.getAnimations()) {
+          a.pause()
+          a.currentTime = t
+        }
+        document.querySelectorAll('svg').forEach((svg) => {
+          svg.pauseAnimations()
+          svg.setCurrentTime(t / 1000)
+        })
+      }
+      w.READY = true
+    })()
+  }, [bind])
 
   const stop = () => agentRef.current?.end()
 
@@ -195,7 +255,7 @@ export default function App() {
   }
 
   const phaseIdx = PHASES.indexOf(s.phase as (typeof PHASES)[number])
-  const elapsed = s.startedAt ? Math.floor(((s.endedAt ?? Date.now()) - s.startedAt) / 1000) : 0
+  const elapsed = s.startedAt ? Math.floor(((s.endedAt ?? clockNow()) - s.startedAt) / 1000) : 0
 
   return (
     <div className="app">
@@ -257,7 +317,7 @@ export default function App() {
             </div>
             {s.rushAt && s.rushAt > 0 ? <span className="pill brand">⚡ RUSH-7781 · courier 14:30</span> : null}
           </div>
-          <SamStage s={s} />
+          <SamStage s={s} speaking={samSays && clockNow() - samSays.at < samSays.ms + 1200 ? samSays.text : undefined} />
           <SlotCard s={s} />
           {s.phase === 'offline' && !busy && <Intro onStart={start} error={status === 'error' ? detail : undefined} />}
           {s.phase === 'ended' && !report.open && (
@@ -278,11 +338,11 @@ export default function App() {
             live={live}
             onRush={() => shift.injectRush()}
             onBroadcast={(t) => {
-              upsert(`d-${Date.now()}`, { who: 'sys', text: `Dana → Sam: “${t}”` })
+              upsert(`d-${clockNow()}`, { who: 'sys', text: `Dana → Sam: “${t}”` })
               shift.broadcast(t)
             }}
             onAnswer={(t) => {
-              upsert(`d-${Date.now()}`, { who: 'sys', text: `Dana: “${t}”` })
+              upsert(`d-${clockNow()}`, { who: 'sys', text: `Dana: “${t}”` })
               shift.answerSupervisor(t)
             }}
           />
@@ -293,6 +353,8 @@ export default function App() {
         <Activity s={s} />
         <Wire events={wire} />
       </div>
+
+      {isVirtual && <VideoCaption captions={captions} sam={samSays} status={status} />}
 
       {report.open && <Report s={s} data={report.data} error={report.error} onClose={() => setReport((r) => ({ ...r, open: false }))} onRestart={newShift} />}
     </div>
@@ -327,4 +389,26 @@ function Intro({ onStart, error }: { onStart: () => void; error?: string }) {
       </div>
     </div>
   )
+}
+
+function VideoCaption({ captions, sam, status }: { captions: Caption[]; sam: { text: string; at: number; ms: number } | null; status: AgentStatus }) {
+  const t = clockNow()
+  if (sam && t - sam.at < sam.ms + 600) {
+    return (
+      <div className="vcap">
+        <b className="u">Sam</b>
+        <span>{sam.text}</span>
+      </div>
+    )
+  }
+  const agent = [...captions].reverse().find((c) => c.who === 'agent')
+  if (agent && (status === 'speaking' || agent.partial)) {
+    return (
+      <div className="vcap">
+        <b className="a">Tote</b>
+        <span>{agent.text.trim()}</span>
+      </div>
+    )
+  }
+  return null
 }
