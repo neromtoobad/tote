@@ -77,26 +77,27 @@ export function FloorMap({ s, agent }: { s: Snapshot; agent: AgentStatus }) {
     return onFrame(frame)
   }, [])
 
+  const active = s.lines[s.active] && (s.phase === 'travel' || s.phase === 'pick' || s.phase === 'paused') ? s.lines[s.active] : undefined
   const pinFor = (l: Line) => ({ x: bayX(l.loc.bay), y: rackY(l.loc.aisle) + RACK.depth / 2 })
 
   return (
     <svg viewBox={`0 0 ${FLOOR.w} ${FLOOR.h}`} role="img" aria-label="Warehouse floor map">
       <defs>
         <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
-          <path d="M20 0H0V20" fill="none" stroke="#e3e7e0" strokeWidth="1" />
+          <path d="M20 0H0V20" fill="none" stroke="#e8ebe5" strokeWidth="1" />
         </pattern>
         <filter id="soft" x="-50%" y="-50%" width="200%" height="200%">
           <feDropShadow dx="0" dy="2" stdDeviation="2.4" floodColor="#16181d" floodOpacity="0.22" />
         </filter>
       </defs>
-      <rect width={FLOOR.w} height={FLOOR.h} fill="#eef1ec" />
+      <rect width={FLOOR.w} height={FLOOR.h} fill="#f1f3ef" />
       <rect width={STAGE_X} height={FLOOR.h} fill="url(#grid)" />
 
       <rect x={STAGE_X} y="0" width={FLOOR.w - STAGE_X} height={FLOOR.h} fill="#f7f8f5" />
       <line x1={STAGE_X} x2={STAGE_X} y1="0" y2={FLOOR.h} stroke="#dee1da" />
 
       {/* walkways */}
-      <g stroke="#c4c9bf" strokeDasharray="6 7" strokeWidth="1.5" fill="none">
+      <g stroke="#d3d8cf" strokeDasharray="3 7" strokeWidth="1.5" strokeLinecap="round" fill="none">
         {AISLES.map((a) => (
           <line key={a} x1={CROSS.left} x2={CROSS.right} y1={walkY(a)} y2={walkY(a)} />
         ))}
@@ -113,38 +114,44 @@ export function FloorMap({ s, agent }: { s: Snapshot; agent: AgentStatus }) {
         ))}
       </g>
 
-      {/* racks */}
+      {/* the aisle Sam is working, tinted so the eye lands there first */}
+      {active && (
+        <rect
+          x={RACK.x0 - 52}
+          y={rackY(active.loc.aisle) - 12}
+          width={BAYS * RACK.bayW + 66}
+          height={RACK.depth + 58}
+          rx="14"
+          fill="#fdeee6"
+          opacity="0.75"
+        />
+      )}
+
+      {/* racks: neutral bins, stock drawn as small cartons */}
       {AISLES.map((a) => (
         <g key={a}>
-          <g transform={`translate(${RACK.x0 - 34} ${rackY(a) + RACK.depth / 2})`}>
-            <circle r="13" fill="#1d2230" />
+          <g transform={`translate(${RACK.x0 - 32} ${rackY(a) + RACK.depth / 2})`}>
+            <rect x="-13" y="-13" width="26" height="26" rx="8" fill={active?.loc.aisle === a ? '#e4571e' : '#1d2230'} />
             <text textAnchor="middle" dy="4.5" fontSize="13" fontWeight="800" fill="#fff">
               {a}
             </text>
           </g>
-          <rect x={RACK.x0 - 2} y={rackY(a) - 2} width={BAYS * RACK.bayW + 4} height={RACK.depth + 8} rx="5" fill="#d7dbd2" />
+          <rect x={RACK.x0 - 3} y={rackY(a) - 3} width={BAYS * RACK.bayW + 6} height={RACK.depth + 10} rx="7" fill="#dfe3da" />
           {Array.from({ length: BAYS }, (_, i) => {
             const bay = i + 1
             const x = RACK.x0 + i * RACK.bayW
+            const isTarget = active?.loc.aisle === a && active.loc.bay === bay
             return (
               <g key={bay}>
-                <rect x={x + 1} y={rackY(a)} width={RACK.bayW - 2} height={RACK.depth} rx="4" fill="#f7f8f5" stroke="#dee1da" />
+                <rect x={x + 1.5} y={rackY(a)} width={RACK.bayW - 3} height={RACK.depth} rx="5" fill={isTarget ? '#fff' : '#fbfbf9'} stroke={isTarget ? '#e4571e' : '#e3e6df'} strokeWidth={isTarget ? 2 : 1} />
+                <rect x={x + 1.5} y={rackY(a) + RACK.depth - 3} width={RACK.bayW - 3} height="3" rx="1.5" fill={isTarget ? '#f6b99c' : '#e6e9e2'} />
                 {Array.from({ length: LEVELS }, (_, lv) => {
                   const slot = s.slots.get(`${a}-${String(bay).padStart(2, '0')}-${lv + 1}`)
-                  const fill = slot ? Math.min(1, slot.onHand / 12) : 0
-                  const w = (RACK.bayW - 14) * fill
-                  return (
-                    <rect
-                      key={lv}
-                      x={x + 7}
-                      y={rackY(a) + 5 + lv * 8}
-                      width={Math.max(2, w)}
-                      height="5"
-                      rx="1.5"
-                      fill={slot ? `hsl(${slot.item.hue} 45% 62%)` : '#ccc'}
-                      opacity={slot && slot.onHand ? 0.75 : 0.18}
-                    />
-                  )
+                  const n = slot ? Math.min(5, Math.ceil(slot.onHand / 3)) : 0
+                  const hot = isTarget && active!.loc.level === lv + 1
+                  return Array.from({ length: n }, (_, k) => (
+                    <rect key={`${lv}-${k}`} x={x + 8 + k * 11} y={rackY(a) + 4 + lv * 8} width="9" height="5.5" rx="1.5" fill={hot ? '#e4571e' : '#cfd5c9'} opacity={hot ? 1 : 0.9} />
+                  ))
                 })}
               </g>
             )

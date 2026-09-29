@@ -39,7 +39,7 @@ async function open() {
   const page = await browser.newPage()
   page.on('pageerror', (e) => console.log('[pageerror]', e.message))
   page.on('console', (m) => m.type() === 'error' && console.log('[page]', m.text()))
-  await page.goto(`${BASE}/?replay=${tape}&fps=${FPS}`, { waitUntil: 'networkidle0' })
+  await page.goto(`${BASE}/?replay=${tape}&fps=${FPS}${args.includes('--full') ? '&full=1' : ''}`, { waitUntil: 'networkidle0' })
   await page.waitForFunction(() => window.READY === true, { timeout: 30000 })
   await page.evaluate(() => document.fonts.ready)
   const total = await page.evaluate(() => window.TOTAL_FRAMES)
@@ -54,7 +54,10 @@ async function shot(page, f) {
 if (args.includes('--stills')) {
   const { browser, page } = await open()
   const times = arg('--stills', '0').split(',').map(Number).sort((a, b) => a - b)
-  for (const t of times) fs.writeFileSync(path.join(out, `${tape}-still-${t}.png`), await shot(page, Math.round(t * FPS)))
+  for (const t of times) {
+    await page.evaluate((n) => window.renderFrame(n), Math.round(t * FPS))
+    fs.writeFileSync(path.join(out, `${tape}-still-${t}${args.includes('--full') ? '-full' : ''}.png`), await page.screenshot({ type: 'png', fullPage: args.includes('--full') }))
+  }
   console.log('stills in', out)
   await browser.close()
   process.exit(0)

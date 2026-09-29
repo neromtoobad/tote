@@ -4,7 +4,8 @@ import { LANGS, Shift, metrics, type LangKey, type Tuning } from './sim/shift'
 import { batcher, fromBase64, openAudio, toBase64, type AudioIO } from './voice/audio'
 import { VoiceAgent, type AgentStatus, type WireEvent } from './voice/agent'
 import { FloorMap } from './ui/FloorMap'
-import { Activity, Desk, Headset, Kpis, SamStage, SlotCard, Wire, type Caption } from './ui/panels'
+import { Activity, Desk, Headset, Kpis, PickList, SamStage, SlotCard, Wire, type Caption } from './ui/panels'
+import { AudioLines, Globe, Hash, Mic, PackageCheck, Square, Zap } from 'lucide-react'
 import { Report, type ReportData } from './ui/Report'
 
 const PHASES = ['briefing', 'travel', 'pick', 'complete'] as const
@@ -17,6 +18,8 @@ type Tape = {
   tail?: number
 }
 let replayStarted = false
+// ?replay=<tape>&full=1 renders the full page layout instead of the video crop.
+const FULL = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('full')
 const PHASE_LABEL: Record<string, string> = { briefing: 'Briefing', travel: 'Go to slot', pick: 'Pick', complete: 'Done' }
 
 function summarize(result: unknown): string {
@@ -282,45 +285,60 @@ export default function App() {
   const elapsed = s.startedAt ? Math.floor(((s.endedAt ?? clockNow()) - s.startedAt) / 1000) : 0
 
   return (
-    <div className={`app${isVirtual ? ' video' : ''}`}>
+    <div className={`app${isVirtual && !FULL ? ' video' : ''}`}>
       <header className="top">
-        <div className="brand">
-          <img src="/favicon.svg" alt="" />
+        <a className="brand" href="/" aria-label="Tote">
+          <img src="/logo.svg" alt="" />
+          <b>tote</b>
+          <span className="brand-sub">Voice picking copilot</span>
+        </a>
+        <div className="whoami">
+          <span className="avatar" aria-hidden />
           <div>
-            <b>Tote</b>
-            <span>Voice picking copilot</span>
+            <b>Sam</b>
+            <span>Picker · zone A–F</span>
+          </div>
+          <span className="vsep" />
+          <div>
+            <b className="mono">T-1042</b>
+            <span>
+              {s.lines.length} lines · {s.lines.reduce((n, l) => n + l.qty, 0)} units
+            </span>
           </div>
         </div>
-        <span className="chip">
-          <b>Sam</b> · picker · tote <span className="mono">T-1042</span>
-        </span>
-        <span className="chip">
-          Powered by <b>AssemblyAI Voice Agent API</b>
-        </span>
         <div className="spacer" />
-        <select className="select" value={lang} disabled={busy} onChange={(e) => setLang(e.target.value as LangKey)} aria-label="Picker language">
-          {Object.entries(LANGS).map(([k, v]) => (
-            <option key={k} value={k}>
-              {v.flag} {v.label}
-            </option>
-          ))}
-        </select>
-        <label className="toggle" title="Server-side voice isolation tuned for a noisy floor (voice_focus: far-field)">
+        <span className="built">
+          <AudioLines size={15} /> Built on <b>AssemblyAI Voice Agent API</b>
+        </span>
+        <label className="field" title="Headset language">
+          <Globe size={15} />
+          <select value={lang} disabled={busy} onChange={(e) => setLang(e.target.value as LangKey)} aria-label="Picker language">
+            {Object.entries(LANGS).map(([k, v]) => (
+              <option key={k} value={k}>
+                {v.flag} {v.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="switch" title="Server-side voice isolation tuned for a noisy floor (voice_focus: far-field)">
           <input type="checkbox" checked={farField} disabled={busy} onChange={(e) => setFarField(e.target.checked)} />
+          <span className="track">
+            <span className="thumb" />
+          </span>
           Noisy floor
         </label>
         {live ? (
           <>
-            <span className="pill ok live">
+            <span className="livepill">
               <span className="dot" /> LIVE {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}
             </span>
             <button className="btn dark" onClick={stop}>
-              End shift
+              <Square size={13} fill="currentColor" /> End shift
             </button>
           </>
         ) : (
           <button className="btn primary" onClick={start} disabled={status === 'connecting'}>
-            {status === 'connecting' ? 'Connecting…' : 'Start shift'}
+            <Mic size={16} /> {status === 'connecting' ? 'Connecting…' : 'Start shift'}
           </button>
         )}
       </header>
@@ -328,6 +346,7 @@ export default function App() {
       <Kpis s={s} />
 
       <div className="main">
+        <div className="left">
         <div className="card floor">
           <FloorMap s={s} agent={status} />
           <div className="floor-h">
@@ -339,7 +358,11 @@ export default function App() {
               ))}
               {s.phase === 'paused' && <span className="on">Paused</span>}
             </div>
-            {s.rushAt && s.rushAt > 0 ? <span className="pill brand">⚡ RUSH-7781 · courier 14:30</span> : null}
+            {s.rushAt && s.rushAt > 0 ? (
+              <span className="pill brand">
+                <Zap size={13} /> RUSH-7781 · courier 14:30
+              </span>
+            ) : null}
           </div>
           <SamStage s={s} speaking={samSays && clockNow() - samSays.at < samSays.ms + 1200 ? samSays.text : undefined} />
           <SlotCard s={s} />
@@ -354,6 +377,8 @@ export default function App() {
               </button>
             </div>
           )}
+        </div>
+        <PickList s={s} />
         </div>
         <div className="side">
           <Headset s={s} status={status} detail={detail} captions={captions} orbRef={orbRef} />
@@ -388,29 +413,49 @@ export default function App() {
 
 function Intro({ onStart, error }: { onStart: () => void; error?: string }) {
   return (
-    <div className="overlay" style={{ position: 'absolute', background: 'rgba(245,245,241,0.72)' }}>
-      <div className="modal" style={{ width: 'min(520px, 100%)' }}>
-        <h2>Put on the headset, Sam.</h2>
-        <p className="sub">You're a picker on tote T-1042. Tote talks you through six picks, hands-free.</p>
-        <ol style={{ margin: '0 0 14px', paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <li>
-            Allow the microphone and say <b>“ready”</b>.
-          </li>
-          <li>
-            When you reach the slot, read the <b>check digits</b> off the label card.
-          </li>
-          <li>
-            Say what you picked. Look at the bin: if it's short or damaged, say so, just like on a real floor.
-          </li>
-        </ol>
-        <p className="hint" style={{ marginTop: 0 }}>
-          Watch for a rush order mid-shift, page your lead, or switch the headset language before you start. Chrome or Edge recommended; headphones
-          optional.
-        </p>
-        {error && <p className="err">{error}</p>}
-        <button className="btn primary" onClick={onStart}>
-          Start shift
-        </button>
+    <div className="intro">
+      <div className="intro-card">
+        <div className="intro-art">
+          <img src="/sam/done.webp" alt="Sam, a warehouse picker, holding a tote" />
+        </div>
+        <div className="intro-body">
+          <span className="kicker">Demo shift · tote T-1042</span>
+          <h2>Put on the headset, Sam.</h2>
+          <p className="sub">Tote talks you through the picks, hands-free. Just talk to it like a person.</p>
+          <ol className="steps">
+            <li>
+              <span className="si">
+                <Mic size={16} />
+              </span>
+              <span>
+                Allow the microphone and say <b>“ready”</b>.
+              </span>
+            </li>
+            <li>
+              <span className="si">
+                <Hash size={16} />
+              </span>
+              <span>
+                At the shelf, read the <b>check digits</b> off the label card.
+              </span>
+            </li>
+            <li>
+              <span className="si">
+                <PackageCheck size={16} />
+              </span>
+              <span>
+                Say what you picked. If the bin is short or a box is crushed, <b>say so</b>.
+              </span>
+            </li>
+          </ol>
+          {error && <p className="err">{error}</p>}
+          <div className="intro-cta">
+            <button className="btn primary lg" onClick={onStart}>
+              <Mic size={18} /> Start shift
+            </button>
+            <span className="hint">Chrome or Edge · headphones optional</span>
+          </div>
+        </div>
       </div>
     </div>
   )

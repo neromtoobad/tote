@@ -779,7 +779,9 @@ ${state}`
       if (mentions(userText, ['damag', 'broken', 'crushed', 'leak'])) tool = 'report_damaged'
       else if (mentions(userText, ['empty'])) tool = 'report_empty_bin'
       else if (mentions(userText, ['wrong'])) tool = 'report_wrong_item'
-      else if (extractCount(userText, lang) !== null || mentions(userText, ['got', 'done', 'picked', 'have them', 'all of them'])) tool = 'confirm_pick'
+      // Only explicit pick language: bare numbers here are often the next
+      // slot's check digits said early, and the model is right to wait.
+      else if (mentions(userText, ['got', 'done', 'picked', 'have them', 'all of them', 'only', 'just', 'grabbed'])) tool = 'confirm_pick'
     }
     if (!tool) return
     if (!this.heardSinceTool.length) this.heardSinceTool = [userText]
