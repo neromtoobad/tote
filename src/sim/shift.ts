@@ -492,6 +492,10 @@ export class Shift {
       .replaceAll('[confirm_pick 3]', '[confirm_pick]')
       .replaceAll('call report_exception.', 'call report_damaged, report_wrong_item or report_empty_bin.')
       .replaceAll('→ report_exception.', '→ report_damaged, report_wrong_item or report_empty_bin.')
+      .replaceAll(
+        'Do not mention the item or quantity yet; that comes after the location is confirmed.',
+        'You do not know the item, the quantity, or whether the digits are right: only read_check_digits knows. The only valid response to digits is calling read_check_digits, even if the same digits were correct at an earlier slot.',
+      )
   }
 
   /** One prompt for the whole shift; the tool list and tool results carry the state. */
@@ -762,6 +766,33 @@ ${state}`
     this.s.endedAt = this.now()
     this.dispose()
     this.changed()
+  }
+
+  /** Guardrail: the model answered an actionable utterance without calling a
+   *  tool. Run the check ourselves and have the agent correct itself. */
+  guard(userText: string) {
+    if (!this.port || !this.tuning.argless) return
+    const lang = this.s.lang
+    let tool: string | null = null
+    if (this.s.phase === 'travel' && extractDigits(userText, lang).length === 2) tool = 'read_check_digits'
+    else if (this.s.phase === 'pick') {
+      if (mentions(userText, ['damag', 'broken', 'crushed', 'leak'])) tool = 'report_damaged'
+      else if (mentions(userText, ['empty'])) tool = 'report_empty_bin'
+      else if (mentions(userText, ['wrong'])) tool = 'report_wrong_item'
+      else if (extractCount(userText, lang) !== null || mentions(userText, ['got', 'done', 'picked', 'have them', 'all of them'])) tool = 'confirm_pick'
+    }
+    if (!tool) return
+    if (!this.heardSinceTool.length) this.heardSinceTool = [userText]
+    const out = this.handleTool(tool, {}, `guard-${Date.now()}`)
+    const say = (out.result as { say?: string }).say
+    this.log('guard', `Agent replied without checking; state machine ran ${tool} itself`)
+    this.changed()
+    if (out.update) this.port.update(out.update, `guard → ${tool}`)
+    if (say)
+      this.port.say(
+        `Your last reply was not based on a check. Say exactly: "Checked. ${say}"`,
+        `Authoritative ${tool} result from the warehouse system: ${JSON.stringify(out.result)}`,
+      )
   }
 
   // --- tool handlers ---------------------------------------------------------------

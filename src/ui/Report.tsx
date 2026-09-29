@@ -48,7 +48,7 @@ export function Report({ s, data, error, onClose, onRestart }: { s: Snapshot; da
         <div className="grid2">
           <div>
             <div className="card-h" style={{ padding: '0 0 6px' }}>
-              Supervisor notes <small>· LLM Gateway ({data?.model ?? '…'})</small>
+              Supervisor notes <small>· {!data ? '…' : data.model === 'rules' ? 'built from the pick log' : `LLM Gateway (${data.model})`}</small>
             </div>
             {data ? <Notes md={data.notes} /> : error ? <p className="err">{error}</p> : <div className="notes hint">Pulling the session recording and writing notes…</div>}
           </div>

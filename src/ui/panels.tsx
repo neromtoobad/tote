@@ -22,12 +22,7 @@ export function Kpis({ s }: { s: Snapshot }) {
   const tiles: { lbl: string; val: ReactNode; sub: string; pill?: ReactNode }[] = [
     { lbl: 'Lines', val: <>{m.done}<small>/ {m.total}</small></>, sub: s.startedAt ? `active ${fmt(m.activeMs)}` : 'tote T-1042' },
     { lbl: 'Units picked', val: m.units, sub: `${s.lines.reduce((n, l) => n + l.qty, 0)} ordered` },
-    {
-      lbl: 'Pace',
-      val: <>{m.lph || '—'}<small>lines/h</small></>,
-      sub: 'vs 72 on paper lists',
-      pill: m.lph > 72 ? <span className="pill ok">+{Math.round((m.lph / 72 - 1) * 100)}%</span> : undefined,
-    },
+    { lbl: 'Pace', val: <>{m.lph || '—'}<small>lines/h</small></>, sub: 'this tote, breaks excluded' },
     { lbl: 'First-time right', val: <>{m.accuracy}<small>%</small></>, sub: 'verified slot, full qty' },
     {
       lbl: 'Wrong slots caught',

@@ -230,6 +230,10 @@ agent.on('wire', (e) => {
     out(e.dir === 'up' ? '  ↑' : '  ↓', `${e.type}${e.detail ? ` · ${e.detail.slice(0, 110)}` : ''}`)
 })
 agent.on('ready', (id) => out('READY', id))
+agent.on('untooled', (text) => {
+  out('GUARD', `reply to “${text}” had no tool call`)
+  shift.guard(text)
+})
 agent.on('raw', (msg) => {
   const t = Date.now() - t0
   if (msg.type === 'reply.audio') {

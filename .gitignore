@@ -36,3 +36,6 @@ art/*.jpg
 video/voice/*.mp3
 video/tapes/
 video/out/
+public/replay/
+video/node_modules/
+SUBMISSION.md

@@ -111,6 +111,7 @@ type PickLog = {
   lines?: { order: string; slot: string; item: string; qty: number; picked: number; status: string; check_digit_rejections: number; rush: boolean }[]
   tasks?: { id: string; kind: string; text: string }[]
   events?: { t: number; kind: string; detail: string; heard?: string }[]
+  metrics?: { lph: number; accuracy: number; minutes: number }
 }
 
 // Used when the account has no LLM Gateway access: the same four sections,
@@ -125,8 +126,9 @@ function ruleNotes(log: PickLog, turns: number) {
   const end = ev.find((e) => e.kind === 'complete')?.t ?? ev[ev.length - 1]?.t ?? 0
   const mins = Math.max(0.1, (end - start) / 60000)
   const exceptions = done.filter((l) => l.status !== 'picked' || l.check_digit_rejections)
+  const m = log.metrics
   const out = [
-    `**Summary** ${done.length} of ${lines.length} lines, ${units} units in ${mins.toFixed(1)} min (${Math.round((done.length / mins) * 60)} lines/h), ${done.length ? Math.round((clean / done.length) * 100) : 100}% first-time right.`,
+    `**Summary** ${done.length} of ${lines.length} lines, ${units} units in ${(m?.minutes ?? mins).toFixed(1)} min (${m?.lph ?? Math.round((done.length / mins) * 60)} lines/h), ${m?.accuracy ?? (done.length ? Math.round((clean / done.length) * 100) : 100)}% first-time right.`,
     '**Exceptions**',
     ...(exceptions.length
       ? exceptions.map((l) => {
@@ -143,7 +145,7 @@ function ruleNotes(log: PickLog, turns: number) {
     '**Follow-ups**',
     ...((log.tasks ?? []).length ? (log.tasks ?? []).map((t) => `- ${t.id}: ${t.text}.`) : ['- None.']),
   ]
-  if (turns) out.push(`\n_${turns} headset turns on record in the session timeline._`)
+  if (turns) out.push(`${turns} headset turns on record in the session timeline.`)
   return out.join('\n')
 }
 

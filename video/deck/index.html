@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Tote · deck</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #f5f5f1; --surface: #fff; --rack: #eceee8; --border: #dee1da; --border2: #c4c9bf;
+    --text: #16181d; --muted: #5e6470; --faint: #8a909a; --brand: #e4571e; --brand-ink: #c9470f; --brand-tint: #fdeee6;
+    --ok: #15803d; --ok-tint: #e7f6ec; --warn: #a15c00; --warn-tint: #fef3dc; --bad: #b42318; --bad-tint: #fde8e6;
+    --info: #2f5bd3; --info-tint: #e8eefc; --ink: #1d2230;
+    --ui: 'Hanken Grotesk', system-ui, sans-serif; --mono: 'JetBrains Mono', ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #d9dbd4; font-family: var(--ui); color: var(--text); -webkit-font-smoothing: antialiased; }
+  @page { size: 1920px 1080px; margin: 0; }
+  .slide {
+    width: 1920px; height: 1080px; position: relative; overflow: hidden; background: var(--bg);
+    padding: 96px 120px; display: flex; flex-direction: column; gap: 36px;
+    page-break-after: always; break-after: page;
+    background-image: linear-gradient(#e6e9e2 1px, transparent 1px), linear-gradient(90deg, #e6e9e2 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+  body.scene .slide { position: absolute; inset: 0; display: none; }
+  body.scene .slide.on { display: flex; }
+  .kicker { font-family: var(--mono); font-size: 22px; font-weight: 700; color: var(--brand-ink); letter-spacing: 0.06em; text-transform: uppercase; }
+  h1 { font-size: 88px; line-height: 1.02; letter-spacing: -0.035em; margin: 0; font-weight: 800; }
+  h2 { font-size: 64px; line-height: 1.05; letter-spacing: -0.03em; margin: 0; font-weight: 800; max-width: 1400px; }
+  p.lede { font-size: 30px; line-height: 1.4; color: var(--muted); margin: 0; max-width: 1150px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 20px; box-shadow: 0 1px 2px rgba(22,24,29,.06); }
+  .mono { font-family: var(--mono); }
+  .foot { position: absolute; left: 120px; right: 120px; bottom: 48px; display: flex; justify-content: space-between; font-size: 18px; color: var(--faint); }
+  .foot b { color: var(--text); }
+  .logo { display: flex; align-items: center; gap: 18px; }
+  .logo img { width: 84px; height: 84px; }
+  .logo b { font-size: 64px; font-weight: 800; letter-spacing: -0.03em; }
+  .row { display: flex; gap: 28px; }
+  .grow { flex: 1; }
+  .pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 16px; border-radius: 999px; font-weight: 700; font-size: 20px; }
+  .pill.ok { color: var(--ok); background: var(--ok-tint); } .pill.brand { color: var(--brand-ink); background: var(--brand-tint); }
+  .pill.info { color: var(--info); background: var(--info-tint); } .pill.warn { color: var(--warn); background: var(--warn-tint); } .pill.bad { color: var(--bad); background: var(--bad-tint); }
+  .shot { border-radius: 18px; border: 1px solid var(--border2); box-shadow: 0 24px 60px -20px rgba(22,24,29,.35); display: block; }
+
+  /* title */
+  .title-sam { position: absolute; right: 150px; bottom: 0; height: 900px; filter: drop-shadow(0 30px 30px rgba(22,24,29,.18)); }
+  .bubble { position: absolute; background: var(--surface); border: 1px solid var(--border); border-radius: 22px; padding: 18px 26px; font-size: 32px; font-weight: 700; box-shadow: 0 16px 40px -18px rgba(22,24,29,.35); display: flex; gap: 14px; align-items: baseline; }
+  .bubble small { font-size: 16px; letter-spacing: .1em; text-transform: uppercase; padding: 4px 10px; border-radius: 8px; color: #fff; }
+  .bubble small.a { background: var(--brand); } .bubble small.u { background: var(--ok); }
+  .label { display: grid; grid-template-columns: auto auto; border: 4px solid var(--ink); border-radius: 12px; overflow: hidden; background: #fffef8; position: absolute; }
+  .label .l { padding: 14px 20px; } .label .loc { font-family: var(--mono); font-size: 46px; font-weight: 800; }
+  .label .bars { height: 34px; margin-top: 8px; background: repeating-linear-gradient(90deg, var(--ink) 0 3px, transparent 3px 5px, var(--ink) 5px 7px, transparent 7px 12px, var(--ink) 12px 17px, transparent 17px 19px); }
+  .label .check { background: var(--ink); color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 26px; }
+  .label .check small { font-size: 16px; letter-spacing: .14em; opacity: .7; } .label .check b { font-family: var(--mono); font-size: 72px; line-height: 1; }
+
+  /* problem */
+  .stat { font-size: 200px; font-weight: 800; letter-spacing: -0.05em; line-height: .9; color: var(--brand-ink); }
+  .pain { padding: 32px; display: flex; flex-direction: column; gap: 12px; }
+  .pain b { font-size: 32px; } .pain span { font-size: 24px; color: var(--muted); line-height: 1.4; }
+  .num { width: 52px; height: 52px; border-radius: 14px; background: var(--ink); color: #fff; display: grid; place-items: center; font-weight: 800; font-size: 26px; }
+  .src { font-size: 17px; color: var(--faint); }
+
+  /* steps */
+  .step { display: flex; gap: 22px; align-items: flex-start; padding: 22px 26px; }
+  .step .ic { flex: none; width: 60px; height: 60px; border-radius: 16px; display: grid; place-items: center; font-size: 30px; background: var(--brand-tint); }
+  .step b { font-size: 30px; display: block; } .step span { font-size: 22px; color: var(--muted); line-height: 1.4; }
+
+  /* architecture */
+  .box { padding: 26px 30px; display: flex; flex-direction: column; gap: 12px; }
+  .box h3 { margin: 0; font-size: 30px; }
+  .box li { font-size: 22px; color: var(--muted); line-height: 1.45; }
+  .box ul { margin: 0; padding-left: 26px; }
+  .wire { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; font-family: var(--mono); font-size: 18px; color: var(--muted); }
+  .wire .arrow { font-size: 44px; color: var(--brand); line-height: 1; }
+  .evt { font-family: var(--mono); font-size: 17px; padding: 4px 10px; border-radius: 8px; background: var(--rack); color: var(--ink); }
+
+  /* phases */
+  .phase { padding: 22px; display: flex; flex-direction: column; gap: 10px; flex: 1; }
+  .phase h4 { margin: 0; font-size: 26px; display: flex; align-items: center; gap: 10px; }
+  .chip { font-family: var(--mono); font-size: 17px; padding: 5px 10px; border-radius: 8px; background: var(--info-tint); border: 1px solid #c9d5f5; width: fit-content; }
+  .chip.hold::after { content: ' · hold'; color: var(--warn); }
+  .arrowr { align-self: center; font-size: 36px; color: var(--border2); }
+  .callout { padding: 26px 30px; display: flex; gap: 24px; align-items: center; font-size: 26px; line-height: 1.4; }
+  .callout .big { font-size: 44px; flex: none; }
+
+  /* chart */
+  .bars2 { display: flex; flex-direction: column; gap: 30px; }
+  .bar { display: grid; grid-template-columns: 520px 1fr 150px; align-items: center; gap: 26px; font-size: 26px; }
+  .bar .track { height: 60px; background: var(--rack); border-radius: 12px; overflow: hidden; }
+  .bar .fill { height: 100%; border-radius: 12px; background: #c4c9bf; transform-origin: left; }
+  .bar .fill.win { background: var(--brand); }
+  .bar b { font-family: var(--mono); font-size: 40px; text-align: right; }
+
+  /* business */
+  .kpi { padding: 30px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+  .kpi .v { font-size: 76px; font-weight: 800; letter-spacing: -0.03em; }
+  .kpi .l { font-size: 24px; color: var(--muted); line-height: 1.35; }
+  .list li { font-size: 27px; line-height: 1.5; margin-bottom: 8px; }
+  .list { margin: 0; padding-left: 30px; }
+  .links { font-family: var(--mono); font-size: 30px; display: flex; flex-direction: column; gap: 14px; }
+  .links b { color: var(--brand-ink); }
+</style>
+</head>
+<body>
+
+<!-- 1 · title -->
+<section class="slide" id="s1">
+  <div class="logo" data-in="0.2"><img src="/favicon.svg" alt="" /><b>Tote</b></div>
+  <h1 data-in="0.5" style="max-width: 780px; margin-top: 60px">The voice in the picker's headset.</h1>
+  <p class="lede" data-in="0.9" style="max-width: 740px">Hands-free voice picking for warehouses, built on the AssemblyAI Voice Agent API. No voice training, no command lists, six headset languages.</p>
+  <div class="row" data-in="1.3" style="margin-top: 20px"><span class="pill brand">AssemblyAI Voice Agent Hackathon</span><span class="pill info mono">tote-voice.up.railway.app</span></div>
+  <img class="title-sam" src="/sam/read.webp" alt="" data-in="0.3" />
+  <div class="label" style="right: 610px; top: 380px" data-in="1.6"><div class="l"><div class="loc">B-07-1</div><div class="bars"></div></div><div class="check"><small>CHECK</small><b>53</b></div></div>
+  <div class="bubble" style="right: 560px; top: 250px" data-in="2.0"><small class="a">Tote</small>Aisle B, bay 7, level 1.</div>
+  <div class="bubble" style="right: 700px; top: 580px" data-in="2.6"><small class="u">Sam</small>Five three.</div>
+  <div class="bubble" style="right: 540px; top: 690px" data-in="3.2"><small class="a">Tote</small>Pick 4, sage ceramic mug.</div>
+</section>
+
+<!-- 2 · problem -->
+<section class="slide" id="s2">
+  <span class="kicker" data-in="0.1">The problem</span>
+  <h2 data-in="0.3">Picking is the most expensive job in the warehouse.</h2>
+  <div class="row" style="align-items: flex-end; gap: 48px" data-in="0.8">
+    <div class="stat">55%</div>
+    <div style="padding-bottom: 18px; max-width: 760px">
+      <div style="font-size: 34px; font-weight: 700">of warehouse operating expense can go to order picking.</div>
+      <div class="src">De Koster, Le-Duc &amp; Roodbergen, "Design and control of warehouse order picking", EJOR 182 (2007)</div>
+    </div>
+  </div>
+  <div class="row" style="margin-top: 10px">
+    <div class="card pain grow" data-in="2.0"><div class="num">1</div><b>Hands and eyes are busy</b><span>Paper lists and handheld scanners take a hand and pull the picker's eyes off the shelf on every pick.</span></div>
+    <div class="card pain grow" data-in="3.8"><div class="num">2</div><b>Legacy voice needs training</b><span>Grammar-based voice systems make each worker record a voice template and learn a fixed command list.</span></div>
+    <div class="card pain grow" data-in="5.6"><div class="num">3</div><b>The workforce keeps changing</b><span>Seasonal peaks, high turnover and many first languages. Day one has to work.</span></div>
+  </div>
+</section>
+
+<!-- 3 · solution -->
+<section class="slide" id="s3">
+  <span class="kicker" data-in="0.1">Tote</span>
+  <h2 data-in="0.3">Pickers just talk. Tote runs the pick.</h2>
+  <div class="row" style="gap: 44px; align-items: flex-start">
+    <div style="display: flex; flex-direction: column; gap: 16px; width: 660px; flex: none">
+      <div class="card step" data-in="0.9"><div class="ic">🧭</div><div><b>Directs the walk</b><span>"Aisle B, bay 7, level 1." The route shows on the floor map.</span></div></div>
+      <div class="card step" data-in="1.4"><div class="ic">🔢</div><div><b>Proves the location</b><span>The picker reads the check digits off the label. A wrong slot is rejected before anything leaves the shelf.</span></div></div>
+      <div class="card step" data-in="1.9"><div class="ic">📦</div><div><b>Directs the pick</b><span>"Got them", "only three here", "this one's damaged": plain speech, no command list.</span></div></div>
+      <div class="card step" data-in="2.4"><div class="ic">⚡</div><div><b>Handles the floor</b><span>Shorts raise replenishment, damage goes on QA hold, rush orders re-route the picker mid-walk.</span></div></div>
+    </div>
+    <img class="shot" src="/video/out/final-still-58.png" alt="" style="width: 980px" data-in="0.6" />
+  </div>
+</section>
+
+<!-- 4 · demo (deck only) -->
+<section class="slide" id="s4">
+  <span class="kicker">Live demo</span>
+  <h2>Put on the headset.</h2>
+  <div class="mono" style="font-size: 44px; color: var(--brand-ink); font-weight: 800; margin-top: -12px">tote-voice.up.railway.app</div>
+  <div class="row" style="gap: 40px; align-items: flex-start">
+    <img class="shot" src="/video/out/final-still-121.png" alt="" style="width: 1180px" />
+    <div class="card box" style="flex: 1">
+      <h3>Try it in Chrome</h3>
+      <ul>
+        <li>Say <b>"ready"</b></li>
+        <li>Read the <b>check digits</b> off the label card (try a wrong one first)</li>
+        <li>B-07-1 has 3 mugs for an order of 4: <b>"only three here"</b></li>
+        <li>D-06-2's yoga mat is crushed: <b>"this one's damaged"</b></li>
+        <li>Watch the rush order re-route you. Ask <b>"how am I doing?"</b></li>
+        <li>Page your lead, then answer as Dana on the desk</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 5 · architecture -->
+<section class="slide" id="s5">
+  <span class="kicker" data-in="0.1">How it works</span>
+  <h2 data-in="0.3">One WebSocket. The key never leaves the server.</h2>
+  <div class="row" style="gap: 20px; align-items: stretch; margin-top: 10px">
+    <div class="card box" style="width: 610px" data-in="0.8">
+      <h3>Browser headset app</h3>
+      <ul>
+        <li>Mic → AudioWorklet → PCM16 @ 24 kHz</li>
+        <li>Ring-buffer playback, flushed on server-confirmed barge-in</li>
+        <li>Shift state machine runs the client-side tools</li>
+        <li>Floor map, captions, shift-lead desk</li>
+      </ul>
+    </div>
+    <div class="wire" style="width: 250px" data-in="1.6">
+      <span class="evt">input.audio</span><span class="arrow">⇄</span><span class="evt">reply.audio</span><span class="evt">tool.call</span><span class="evt">tool.result</span><span class="evt">session.update</span>
+    </div>
+    <div class="card box" style="flex: 1; border-color: var(--brand); border-width: 2px" data-in="2.2">
+      <h3>AssemblyAI Voice Agent API</h3>
+      <ul>
+        <li>Universal-3 Pro streaming speech-to-text, keyterms</li>
+        <li>Semantic turn detection and barge-in</li>
+        <li>LLM with JSON-Schema tool calling</li>
+        <li>Voices: alba, lola, juergen, estelle, giovanni, rafael</li>
+        <li>voice_focus far-field for a noisy floor</li>
+      </ul>
+    </div>
+  </div>
+  <div class="row" style="gap: 20px" data-in="3.6">
+    <div class="card box grow"><h3>Node server</h3><ul><li>Mints single-use tokens (<span class="mono">GET /v1/token</span>), rate-limited</li><li>Session cap, 15 min</li></ul></div>
+    <div class="card box grow"><h3>Sessions API</h3><ul><li>Recording + conversation timeline for every shift</li><li>Shift report and audit trail for every pick</li></ul></div>
+  </div>
+</section>
+
+<!-- 6 · the constrained agent -->
+<section class="slide" id="s6">
+  <span class="kicker" data-in="0.1">A constrained agent</span>
+  <h2 data-in="0.3">Each step exposes only the tools it needs.</h2>
+  <div class="row" style="gap: 12px; align-items: stretch">
+    <div class="card phase" data-in="1.0"><h4>Briefing</h4><span class="chip">start_batch</span></div>
+    <span class="arrowr" data-in="1.2">→</span>
+    <div class="card phase" data-in="1.4"><h4>Travel</h4><span class="chip">read_check_digits</span><span class="chip">skip_location</span></div>
+    <span class="arrowr" data-in="1.6">→</span>
+    <div class="card phase" data-in="1.8"><h4>Pick</h4><span class="chip">confirm_pick</span><span class="chip">report_damaged</span><span class="chip">report_wrong_item</span><span class="chip">report_empty_bin</span></div>
+    <span class="arrowr" data-in="2.0">→</span>
+    <div class="card phase" data-in="2.2"><h4>Complete</h4><span class="chip">end_shift</span></div>
+  </div>
+  <div class="row" style="gap: 12px" data-in="2.6"><span class="chip">shift_status</span><span class="chip">pause_shift → resume_shift</span><span class="chip hold">call_supervisor</span><span style="font-size: 22px; color: var(--muted); align-self: center">available throughout</span></div>
+  <div class="card callout" data-in="5.2"><span class="big">🔒</span><div><b>session.update swaps the prompt and tools on every transition.</b> confirm_pick doesn't exist until the slot is verified, so Tote can't log a pick at the wrong slot.</div></div>
+  <div class="card callout" data-in="9.6"><span class="big">🔢</span><div><b>The model picks the intent; code reads the value.</b> Check digits and counts are parsed from the Universal-3 Pro transcript, never generated by the LLM. A check digit can't be hallucinated.</div></div>
+</section>
+
+<!-- 7 · latency -->
+<section class="slide" id="s7">
+  <span class="kicker" data-in="0.1">Measured on the live API</span>
+  <h2 data-in="0.3">From end of speech to Tote's voice: 3.96 s → 1.6 s.</h2>
+  <div class="bars2" style="margin-top: 30px">
+    <div class="bar" data-in="1.2"><span>Default adaptive turn-taking</span><div class="track"><div class="fill" style="width: 100%"></div></div><b>3.96 s</b></div>
+    <div class="bar" data-in="2.2"><span>+ value-free tools</span><div class="track"><div class="fill" style="width: 96%"></div></div><b>3.81 s</b></div>
+    <div class="bar" data-in="3.4"><span>+ pinned end-of-turn window</span><div class="track"><div class="fill win" style="width: 40%"></div></div><b style="color: var(--brand-ink)">1.60 s</b></div>
+  </div>
+  <p class="lede" data-in="4.6" style="margin-top: 20px">Median over full recorded shifts (scripts/drive.ts). The adaptive window had stretched to about 3 s because pickers go quiet while they walk between slots. <span class="mono" style="font-size: 24px">min_silence 250 · max_silence 900</span></p>
+</section>
+
+<!-- 8 · business -->
+<section class="slide" id="s8">
+  <span class="kicker" data-in="0.1">Business value</span>
+  <h2 data-in="0.3">Faster onboarding, fewer wrong picks, a record of every pick.</h2>
+  <div class="row">
+    <div class="card kpi" data-in="0.8"><span class="v">$3.0B</span><span class="l">voice picking solution market, 2025<br /><span class="src">Grand View Research</span></span></div>
+    <div class="card kpi" data-in="1.2"><span class="v">0 min</span><span class="l">voice-template training. A new picker starts on day one.</span></div>
+    <div class="card kpi" data-in="1.6"><span class="v">6 / 18</span><span class="l">languages Tote speaks / understands, with code-switching</span></div>
+  </div>
+  <div class="row" style="gap: 48px" data-in="2.2">
+    <ul class="list grow">
+      <li><b>Buyers:</b> 3PLs, e-commerce DCs, grocery micro-fulfillment</li>
+      <li><b>Model:</b> per active headset per month, usage-based voice</li>
+      <li><b>Wedge:</b> runs in a browser on hardware sites already own</li>
+    </ul>
+    <ul class="list grow">
+      <li>Wrong slot rejected <b>before</b> the pick, not at pack-out</li>
+      <li>Shorts and damage become tasks in real time</li>
+      <li>Every pick backed by the session recording and timeline</li>
+    </ul>
+  </div>
+</section>
+
+<!-- 9 · next + links -->
+<section class="slide" id="s9">
+  <div class="logo" data-in="0.1"><img src="/favicon.svg" alt="" /><b>Tote</b></div>
+  <h2 data-in="0.3">Hands free. Eyes on the shelf.</h2>
+  <div class="row" style="gap: 48px; align-items: flex-start">
+    <div class="grow">
+      <div class="kicker" style="margin-bottom: 18px" data-in="0.8">Next</div>
+      <ul class="list" data-in="1.0">
+        <li>WMS connectors (Manhattan, SAP EWM, NetSuite) as HTTP tools</li>
+        <li>Rugged Android headsets and phones over SIP</li>
+        <li>Live multi-picker floor for the shift lead</li>
+        <li>Keyterms generated from each site's item master</li>
+      </ul>
+    </div>
+    <div class="links grow" data-in="1.6">
+      <span>Live demo <b>tote-voice.up.railway.app</b></span>
+      <span>Code <b>github.com/neromtoobad/tote</b></span>
+      <span style="font-size: 22px; color: var(--muted); font-family: var(--ui)">Built on the AssemblyAI Voice Agent API · Universal-3 Pro · Sessions API</span>
+    </div>
+  </div>
+  <img src="/sam/done.webp" alt="" style="position: absolute; right: 120px; bottom: 0; height: 560px" data-in="0.4" />
+</section>
+
+<script>
+  // Scenes for the demo video: which slide shows when, and for how long.
+  const SCENES = {
+    intro: { dur: 28, cuts: [['s1', 0], ['s2', 9.0], ['s3', 17.8]] },
+    tech: { dur: 34, cuts: [['s5', 0], ['s6', 8.4], ['s7', 24.0]] },
+    outro: { dur: 12.5, cuts: [['s8', 0], ['s9', 5.6]] },
+  }
+  const q = new URLSearchParams(location.search)
+  const scene = SCENES[q.get('scene')]
+  const FPS = Number(q.get('fps') || 30)
+  const ease = (x) => 1 - Math.pow(1 - x, 3)
+  function show(id, t) {
+    document.querySelectorAll('.slide').forEach((s) => s.classList.toggle('on', s.id === id))
+    const slide = document.getElementById(id)
+    slide.querySelectorAll('[data-in]').forEach((el) => {
+      const p = ease(Math.max(0, Math.min(1, (t - Number(el.dataset.in)) / 0.55)))
+      el.style.opacity = p
+      el.style.transform = `translateY(${(1 - p) * 22}px)`
+    })
+    slide.querySelectorAll('.fill').forEach((f, i) => {
+      const bar = f.closest('[data-in]')
+      const p = ease(Math.max(0, Math.min(1, (t - Number(bar?.dataset.in ?? 0) - 0.2) / 0.9)))
+      f.style.transform = `scaleX(${p})`
+    })
+  }
+  if (scene) {
+    document.body.classList.add('scene')
+    window.FPS = FPS
+    window.TOTAL_FRAMES = Math.ceil(scene.dur * FPS)
+    window.renderFrame = async (n) => {
+      const t = n / FPS
+      let cur = scene.cuts[0]
+      for (const c of scene.cuts) if (t >= c[1]) cur = c
+      show(cur[0], t - cur[1])
+    }
+    document.fonts.ready.then(() => Promise.all([...document.images].map((i) => i.complete || new Promise((r) => (i.onload = i.onerror = r))))).then(() => (window.READY = true))
+  } else {
+    window.READY = true
+  }
+</script>
+</body>
+</html>

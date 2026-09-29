@@ -42,7 +42,8 @@ type Listeners = {
   ready: (sessionId: string, config: unknown) => void
   userDelta: (itemId: string, text: string) => void
   user: (itemId: string, text: string) => void
-  agentDelta: (replyId: string, word: string) => void
+  /** `at` is when the word is spoken (clock time), from the delta's start_ms. */
+  agentDelta: (replyId: string, word: string, at: number) => void
   agent: (replyId: string, text: string, interrupted: boolean) => void
   toolCall: (name: string, args: Record<string, unknown>, callId: string) => void
   toolResult: (name: string, result: unknown, isError: boolean) => void
@@ -52,6 +53,8 @@ type Listeners = {
   userSpeaking: (on: boolean) => void
   latency: (ms: number) => void
   ended: (info: { sessionSeconds?: number; audioSeconds?: number | null }) => void
+  /** A reply to a user turn finished without calling any tool. */
+  untooled: (userText: string) => void
   /** Every server message as received, before handling (used to record demo tapes). */
   raw: (msg: Record<string, unknown>) => void
 }
@@ -68,6 +71,14 @@ export class VoiceAgent {
   private speechStoppedAt = 0
   private awaitingFirstAudio = false
   private userSpeaking = false
+  private replyAudioAt = 0
+  // Guardrail bookkeeping: which reply answered the latest user turn, and
+  // whether it called a tool.
+  private lastUserText = ''
+  private awaitingUserReply = false
+  private userReplyId: string | null = null
+  private userReplyTooled = false
+  private replyAudioSeen = false
   sessionId: string | null = null
   ready = false
   status: AgentStatus = 'idle'
@@ -248,16 +259,28 @@ export class VoiceAgent {
         this.emit('userDelta', msg.item_id, msg.text)
         break
       case 'transcript.user':
+        this.lastUserText = String(msg.text ?? '')
+        this.awaitingUserReply = true
         this.userSpeaking = false
         this.wire('down', t, msg.text)
         this.emit('user', msg.item_id, msg.text)
         break
       case 'reply.started':
+        if (this.awaitingUserReply) {
+          this.awaitingUserReply = false
+          this.userReplyId = msg.reply_id
+          this.userReplyTooled = false
+        }
+        this.replyAudioSeen = false
         this.lastTurnEvent = t
         this.wire('down', t)
         this.setStatus('speaking')
         break
       case 'reply.audio':
+        if (!this.replyAudioSeen) {
+          this.replyAudioSeen = true
+          this.replyAudioAt = clockNow()
+        }
         if (this.awaitingFirstAudio && this.speechStoppedAt) {
           this.awaitingFirstAudio = false
           this.emit('latency', Math.round(clockNow() - this.speechStoppedAt))
@@ -265,13 +288,17 @@ export class VoiceAgent {
         this.emit('audio', this.decode(msg.data))
         break
       case 'transcript.agent.delta':
-        this.emit('agentDelta', msg.reply_id, msg.delta)
+        this.emit('agentDelta', msg.reply_id, msg.delta, typeof msg.start_ms === 'number' && this.replyAudioSeen ? this.replyAudioAt + msg.start_ms : clockNow())
         break
       case 'transcript.agent':
         this.wire('down', t, msg.text)
         this.emit('agent', msg.reply_id, msg.text, Boolean(msg.interrupted))
         break
       case 'reply.done':
+        if (msg.reply_id === this.userReplyId) {
+          this.userReplyId = null
+          if (!this.userReplyTooled && msg.status === 'completed') this.emit('untooled', this.lastUserText)
+        }
         this.lastTurnEvent = t
         this.wire('down', t, msg.status)
         if (msg.status === 'interrupted') {
@@ -283,6 +310,7 @@ export class VoiceAgent {
         this.drainQueue()
         break
       case 'tool.call': {
+        this.userReplyTooled = true
         const args = (msg.arguments ?? {}) as Record<string, unknown>
         this.wire('down', t, `${msg.name} ${JSON.stringify(args)}`)
         this.emit('toolCall', msg.name, args, msg.call_id)

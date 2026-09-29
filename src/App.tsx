@@ -1,6 +1,6 @@
 import { advanceTo, epoch, isVirtual, later, now as clockNow, onFrame } from './clock'
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { LANGS, Shift, type LangKey, type Tuning } from './sim/shift'
+import { LANGS, Shift, metrics, type LangKey, type Tuning } from './sim/shift'
 import { batcher, fromBase64, openAudio, toBase64, type AudioIO } from './voice/audio'
 import { VoiceAgent, type AgentStatus, type WireEvent } from './voice/agent'
 import { FloorMap } from './ui/FloorMap'
@@ -77,8 +77,10 @@ export default function App() {
     setCaptions((cs) => {
       const i = cs.findIndex((c) => c.id === id)
       if (i === -1) return [...cs, { id, text: '', ...patch }].slice(-80)
+      const cur = cs[i]
+      // A word revealed after the final transcript landed must not append to it.
+      if (append && cur.partial === false) return cs
       const next = cs.slice()
-      const cur = next[i]
       next[i] = { ...cur, ...patch, text: append ? `${cur.text}${patch.text ?? ''}` : (patch.text ?? cur.text) }
       return next
     })
@@ -109,6 +111,10 @@ export default function App() {
               lines: snap.lines.map((l) => ({ order: l.order, slot: `${l.loc.aisle}-${l.loc.bay}-${l.loc.level}`, item: l.item.name, qty: l.qty, picked: l.picked, status: l.status, check_digit_rejections: l.mismatches, rush: Boolean(l.rush) })),
               tasks: snap.tasks,
               events: snap.log,
+              metrics: (() => {
+                const m = metrics(snap)
+                return { lph: m.lph, accuracy: m.accuracy, minutes: m.activeMs / 60000 }
+              })(),
             },
           }),
         })
@@ -155,12 +161,16 @@ export default function App() {
         if (!on) audioRef.current?.tick()
       })
       agent.on('latency', (ms) => sh.latency(ms))
+      agent.on('untooled', (text) => sh.guard(text))
       agent.on('userDelta', (id, text) => upsert(`u-${id}`, { who: 'user', text, partial: true }))
       agent.on('user', (id, text) => {
         sh.heard(text)
         upsert(`u-${id}`, { who: 'user', text, partial: false })
       })
-      agent.on('agentDelta', (id, word) => upsert(`a-${id}`, { who: 'agent', text: /^[\s.,!?;:]/.test(word) ? word : ` ${word}`, partial: true }, true))
+      // Deltas arrive in a burst; reveal each word when it is actually spoken.
+      agent.on('agentDelta', (id, word, at) =>
+        later(() => upsert(`a-${id}`, { who: 'agent', text: /^[\s.,!?;:]/.test(word) ? word : ` ${word}`, partial: true }, true), Math.max(0, at - clockNow())),
+      )
       agent.on('agent', (id, text, cut) => upsert(`a-${id}`, { who: 'agent', text, partial: false, cut }))
       agent.on('toolCall', (name, args, id) => upsert(`t-${id}`, { who: 'tool', text: `${name}(${Object.values(args).map((v) => JSON.stringify(v)).join(', ')})` }))
       agent.on('toolResult', (name, result, isErr) =>
@@ -242,6 +252,8 @@ export default function App() {
         advanceTo(t0 + t)
         await new Promise((r) => setTimeout(r, 0))
         await new Promise((r) => setTimeout(r, 0))
+        // Frame callbacks read refs React just updated; run them once more.
+        advanceTo(t0 + t)
         for (const a of document.getAnimations()) {
           a.pause()
           a.currentTime = t
@@ -270,7 +282,7 @@ export default function App() {
   const elapsed = s.startedAt ? Math.floor(((s.endedAt ?? clockNow()) - s.startedAt) / 1000) : 0
 
   return (
-    <div className="app">
+    <div className={`app${isVirtual ? ' video' : ''}`}>
       <header className="top">
         <div className="brand">
           <img src="/favicon.svg" alt="" />
@@ -367,6 +379,7 @@ export default function App() {
       </div>
 
       {isVirtual && <VideoCaption captions={captions} sam={samSays} status={status} />}
+      {isVirtual && <VideoChapter s={s} />}
 
       {report.open && <Report s={s} data={report.data} error={report.error} onClose={() => setReport((r) => ({ ...r, open: false }))} onRestart={newShift} />}
     </div>
@@ -423,4 +436,33 @@ function VideoCaption({ captions, sam, status }: { captions: Caption[]; sam: { t
     )
   }
   return null
+}
+
+// Replay only: name what just happened and the API feature doing it.
+const CHAPTERS: Record<string, [string, string]> = {
+  start: ['Shift starts on "ready"', 'client tool · start_batch'],
+  verify: ['Slot verified by check digits', 'digits read from the transcript, not the model'],
+  mismatch: ['Wrong slot caught', 'check digits rejected before anything leaves the shelf'],
+  short: ['Short pick → replenishment task', 'confirm_pick · count parsed from speech'],
+  rush: ['Rush order: Tote re-routes Sam unprompted', 'reply.create + conversation.message'],
+  damaged: ['Damaged stock → QA hold', 'report_damaged · progressive tool reveal'],
+  pause: ['Break: Tote goes quiet', 'pause_shift · phase tools swap to resume_shift'],
+  resume: ['Back to work', 'resume_shift'],
+  complete: ['Tote complete', 'shift report from the session recording'],
+  guard: ['Guardrail: the model answered without checking', 'the state machine ran the check and corrected it'],
+}
+
+function VideoChapter({ s }: { s: ReturnType<Shift['getSnapshot']> }) {
+  const now = clockNow()
+  const e = [...s.log].reverse().find((x) => x.kind in CHAPTERS)
+  if (!e || !s.startedAt) return null
+  const age = now - (s.startedAt + e.t)
+  if (age > 5200) return null
+  const [title, sub] = CHAPTERS[e.kind]
+  return (
+    <div className="vchap" key={`${e.kind}-${e.t}`}>
+      <b>{title}</b>
+      <span>{sub}</span>
+    </div>
+  )
 }
