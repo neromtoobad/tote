@@ -1,6 +1,6 @@
 import { advanceTo, epoch, isVirtual, later, now as clockNow, onFrame } from './clock'
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { LANGS, Shift, type LangKey } from './sim/shift'
+import { LANGS, Shift, type LangKey, type Tuning } from './sim/shift'
 import { batcher, fromBase64, openAudio, toBase64, type AudioIO } from './voice/audio'
 import { VoiceAgent, type AgentStatus, type WireEvent } from './voice/agent'
 import { FloorMap } from './ui/FloorMap'
@@ -10,6 +10,7 @@ import { Report, type ReportData } from './ui/Report'
 const PHASES = ['briefing', 'travel', 'pick', 'complete'] as const
 
 type Tape = {
+  tuning?: Tuning
   lang: LangKey
   events: { t: number; msg?: Record<string, unknown>; sam?: string; len?: number }[]
   report?: ReportData
@@ -146,6 +147,9 @@ export default function App() {
       agent.on('wire', (e) => setWire((w) => [...w, e].slice(-250)))
       agent.on('audio', (pcm) => audioRef.current?.play(pcm))
       agent.on('bargeIn', () => audioRef.current?.flush())
+      agent.on('userSpeaking', (on) => {
+        if (!on) audioRef.current?.tick()
+      })
       agent.on('latency', (ms) => sh.latency(ms))
       agent.on('userDelta', (id, text) => upsert(`u-${id}`, { who: 'user', text, partial: true }))
       agent.on('user', (id, text) => {
@@ -211,6 +215,7 @@ export default function App() {
       const tape = (await fetch(`/replay/${q.get('replay') || 'demo'}/tape.json`).then((r) => r.json())) as Tape
       const fps = Number(q.get('fps') ?? 30)
       const sh = new Shift(tape.lang)
+      if (tape.tuning) sh.tuning = tape.tuning
       setShift(sh)
       const agent = bind(sh, tape.report)
       for (const ev of tape.events) {

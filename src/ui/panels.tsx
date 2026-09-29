@@ -1,6 +1,6 @@
 import { every } from '../clock'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { LANGS, metrics, type Line, type Snapshot } from '../sim/shift'
+import { LANGS, metrics, toolCatalog, type Line, type Snapshot } from '../sim/shift'
 import { bayX, checkDigits, code, rackY, spoken, FLOOR, STAGE_X } from '../sim/warehouse'
 import { POSE_CAPTION, poseFor, useNow } from './pose'
 import type { AgentStatus, WireEvent } from '../voice/agent'
@@ -112,18 +112,6 @@ const TRY: Record<string, string[]> = {
   paused: ['"I\'m back"'],
   complete: ['"End shift"', '"What was my rate?"'],
 }
-const ALL_TOOLS = [
-  'start_batch',
-  'confirm_location',
-  'skip_location',
-  'confirm_pick',
-  'report_exception',
-  'shift_status',
-  'pause_shift',
-  'resume_shift',
-  'call_supervisor',
-  'end_shift',
-]
 
 export function Headset({
   s,
@@ -194,7 +182,7 @@ export function Headset({
         <span>
           Tools the agent can call right now <b className="mono">({s.phase})</b>
         </span>
-        {ALL_TOOLS.map((t) => (
+        {toolCatalog(true).map((t) => (
           <span key={t} className={`tool${s.tools.includes(t) ? ' on' : ''}${t === 'call_supervisor' ? ' hold' : ''}`}>
             {t}
           </span>

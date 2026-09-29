@@ -120,6 +120,8 @@ export type AudioIO = {
   flush: () => void
   micLevel: () => number
   onSpeaker: (fn: (s: { idle: boolean; level: number }) => void) => void
+  /** A soft two-note tick the instant the picker stops talking: "heard you". */
+  tick: () => void
   close: () => Promise<void>
 }
 
@@ -161,6 +163,25 @@ export async function openAudio(deviceId?: string): Promise<AudioIO> {
     onSpeaker: (fn) => (speakerFn = fn),
     play: (pcm) => player.port.postMessage(pcm, [pcm]),
     flush: () => player.port.postMessage('flush'),
+    tick: () => {
+      const t = playCtx.currentTime
+      const g = playCtx.createGain()
+      g.gain.setValueAtTime(0.0001, t)
+      g.gain.exponentialRampToValueAtTime(0.07, t + 0.01)
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14)
+      g.connect(playCtx.destination)
+      for (const [f, at] of [
+        [880, 0],
+        [1320, 0.06],
+      ] as const) {
+        const o = playCtx.createOscillator()
+        o.type = 'sine'
+        o.frequency.value = f
+        o.connect(g)
+        o.start(t + at)
+        o.stop(t + at + 0.08)
+      }
+    },
     micLevel: () => {
       analyser.getFloatTimeDomainData(levelBuf)
       let s = 0

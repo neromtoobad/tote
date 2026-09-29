@@ -107,6 +107,46 @@ Output exactly these markdown sections, terse, no preamble:
 **Follow-ups** bullets a supervisor should action today.
 Never invent numbers or locations that are not in the input.`
 
+type PickLog = {
+  lines?: { order: string; slot: string; item: string; qty: number; picked: number; status: string; check_digit_rejections: number; rush: boolean }[]
+  tasks?: { id: string; kind: string; text: string }[]
+  events?: { t: number; kind: string; detail: string; heard?: string }[]
+}
+
+// Used when the account has no LLM Gateway access: the same four sections,
+// built straight from the pick log so nothing is ever invented.
+function ruleNotes(log: PickLog, turns: number) {
+  const lines = log.lines ?? []
+  const done = lines.filter((l) => l.status !== 'pending' && l.status !== 'active')
+  const units = done.reduce((n, l) => n + l.picked, 0)
+  const clean = done.filter((l) => l.status === 'picked' && !l.check_digit_rejections).length
+  const ev = log.events ?? []
+  const start = ev.find((e) => e.kind === 'start')?.t ?? 0
+  const end = ev.find((e) => e.kind === 'complete')?.t ?? ev[ev.length - 1]?.t ?? 0
+  const mins = Math.max(0.1, (end - start) / 60000)
+  const exceptions = done.filter((l) => l.status !== 'picked' || l.check_digit_rejections)
+  const out = [
+    `**Summary** ${done.length} of ${lines.length} lines, ${units} units in ${mins.toFixed(1)} min (${Math.round((done.length / mins) * 60)} lines/h), ${done.length ? Math.round((clean / done.length) * 100) : 100}% first-time right.`,
+    '**Exceptions**',
+    ...(exceptions.length
+      ? exceptions.map((l) => {
+          const what =
+            l.status === 'short' ? `short ${l.qty - l.picked} of ${l.qty}, replenishment raised` : l.status === 'damaged' ? 'damaged stock, QA hold placed, not picked' : l.status === 'skipped' ? 'skipped and flagged to the lead' : `${l.check_digit_rejections} wrong check-digit read caught before picking`
+          return `- ${l.slot} ${l.item}: ${what}.`
+        })
+      : ['- None.']),
+    '**Coaching**',
+    ...(ev.some((e) => e.kind === 'mismatch')
+      ? ['- Misread a check digit once; the location check stopped a wrong-slot pick. Read both digits at a steady pace.']
+      : ['- Clean location reads all shift.']),
+    ...(ev.some((e) => e.kind === 'rush') ? ['- Took the rush re-route mid-walk without losing the batch.'] : []),
+    '**Follow-ups**',
+    ...((log.tasks ?? []).length ? (log.tasks ?? []).map((t) => `- ${t.id}: ${t.text}.`) : ['- None.']),
+  ]
+  if (turns) out.push(`\n_${turns} headset turns on record in the session timeline._`)
+  return out.join('\n')
+}
+
 async function buildReport(sessionId: string | undefined, log: unknown) {
   let session: Session | null = null
   let timeline: unknown = null
@@ -123,13 +163,22 @@ async function buildReport(sessionId: string | undefined, log: unknown) {
     }
   }
   const convo = timeline ? JSON.stringify(timeline).slice(0, 24_000) : '(recording not available yet)'
-  const notes = await chat(
-    REPORT_SYSTEM,
-    `PICK LOG\n${JSON.stringify(log).slice(0, 16_000)}\n\nHEADSET CONVERSATION (AssemblyAI session timeline)\n${convo}`,
-  )
+  const turns = Array.isArray(timeline) ? timeline.length : Array.isArray((timeline as { turns?: unknown[] })?.turns) ? (timeline as { turns: unknown[] }).turns.length : 0
+  let notes: string
+  let model = REPORT_MODEL
+  try {
+    notes = await chat(
+      REPORT_SYSTEM,
+      `PICK LOG\n${JSON.stringify(log).slice(0, 16_000)}\n\nHEADSET CONVERSATION (AssemblyAI session timeline)\n${convo}`,
+    )
+  } catch (e) {
+    console.warn('gateway unavailable, using rule notes:', (e as Error).message.slice(0, 120))
+    notes = ruleNotes(log as PickLog, turns)
+    model = 'rules'
+  }
   return {
     notes,
-    model: REPORT_MODEL,
+    model,
     session: session && { id: session.id, status: session.status, duration: session.duration_seconds },
     recording,
     timeline,

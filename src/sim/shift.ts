@@ -1,4 +1,5 @@
 import { later as clockLater, now as clockNow } from '../clock.ts'
+import { extractCount, extractDigits, mentions } from './parse.ts'
 // The shift state machine. Each phase owns a narrow system prompt and a small
 // tool list, pushed to the agent with session.update on every transition
 // ("progressive tool reveal"): the agent cannot confirm a pick before the
@@ -216,6 +217,83 @@ const PHASE_TOOLS: Record<Phase, (keyof typeof T)[]> = {
   ended: [],
 }
 
+// The argument-free tool set. Tools that carry values run ~3 s slower on the
+// managed model, so here the model only chooses the intent and parse.ts reads
+// the digits and counts from the transcript itself.
+const EMPTY = { type: 'object', properties: {} }
+const A = {
+  read_check_digits: {
+    type: 'function',
+    name: 'read_check_digits',
+    description:
+      'Call as soon as the picker says the two check digits printed on the slot label ("four seven", "47", "zero nine"). The system reads the digits from their words; pass nothing.',
+    parameters: EMPTY,
+  },
+  confirm_pick: {
+    type: 'function',
+    name: 'confirm_pick',
+    description:
+      'Call when the picker says what they picked: "done", "got them", "picked", a number, or fewer than asked ("only three here"). The system reads the count from their words; pass nothing.',
+    parameters: EMPTY,
+  },
+  report_damaged: { type: 'function', name: 'report_damaged', description: 'Call when the product at the slot is damaged, crushed, broken or leaking.', parameters: EMPTY },
+  report_wrong_item: { type: 'function', name: 'report_wrong_item', description: 'Call when the bin holds a different product than the one asked for.', parameters: EMPTY },
+  report_empty_bin: { type: 'function', name: 'report_empty_bin', description: 'Call when the bin is completely empty.', parameters: EMPTY },
+  skip_location: { type: 'function', name: 'skip_location', description: 'Call when the slot is blocked, cannot be found, or is unsafe to reach.', parameters: EMPTY },
+  pause_shift: { type: 'function', name: 'pause_shift', description: 'Call when they want a break or the restroom, or report an equipment problem.', parameters: EMPTY },
+  call_supervisor: {
+    type: 'function',
+    name: 'call_supervisor',
+    description: 'Page the shift lead. Call when they ask for a person or supervisor, feel unsafe, are injured, or are stuck.',
+    parameters: EMPTY,
+    execution_mode: 'hold',
+    timeout_seconds: 120,
+  },
+} satisfies Record<string, ToolDef>
+
+const ARGLESS_TOOLS: Record<Phase, string[]> = {
+  offline: [],
+  briefing: ['start_batch', 'shift_status', 'call_supervisor'],
+  travel: ['read_check_digits', 'skip_location', 'shift_status', 'pause_shift', 'call_supervisor'],
+  pick: ['confirm_pick', 'report_damaged', 'report_wrong_item', 'report_empty_bin', 'shift_status', 'pause_shift', 'call_supervisor'],
+  paused: ['resume_shift', 'shift_status', 'call_supervisor'],
+  complete: ['end_shift', 'shift_status'],
+  ended: [],
+}
+
+export function toolCatalog(argless: boolean) {
+  return argless
+    ? ['start_batch', 'read_check_digits', 'skip_location', 'confirm_pick', 'report_damaged', 'report_wrong_item', 'report_empty_bin', 'shift_status', 'pause_shift', 'resume_shift', 'call_supervisor', 'end_shift']
+    : ['start_batch', 'confirm_location', 'skip_location', 'confirm_pick', 'report_exception', 'shift_status', 'pause_shift', 'resume_shift', 'call_supervisor', 'end_shift']
+}
+
+/** The same tool without value-shape hints (pattern, examples, bounds). */
+function plain(t: ToolDef): ToolDef {
+  const props = (t.parameters as { properties?: Record<string, Record<string, unknown>> }).properties ?? {}
+  const stripped = Object.fromEntries(
+    Object.entries(props).map(([k, v]) => {
+      const { pattern: _p, examples: _e, minimum: _mi, maximum: _ma, ...rest } = v
+      return [k, rest]
+    }),
+  )
+  return { ...t, parameters: { ...t.parameters, properties: stripped } }
+}
+
+export type Tuning = {
+  staticPrompt?: boolean
+  mode?: 'min_latency' | 'balanced' | 'max_accuracy'
+  plainParams?: boolean
+  ack?: boolean
+  argless?: boolean
+  allTools?: boolean
+  silence?: [number, number]
+}
+
+/** Measured on the live API (scripts/drive.ts): value-free tools plus a pinned
+ *  end-of-turn window took speech-end → first audio from ~3.9 s to ~1.6 s. The
+ *  adaptive window had stretched to ~3 s because pickers go quiet while walking. */
+export const DEFAULT_TUNING: Tuning = { argless: true, silence: [250, 900] }
+
 // --- agent port (set per session) ---------------------------------------------
 export type AgentPort = {
   update: (s: SessionConfig, detail?: string) => void
@@ -257,6 +335,16 @@ export class Shift {
   private subs = new Set<() => void>()
   private timers: (() => void)[] = []
   port: AgentPort | null = null
+  /** Latency knobs: a static prompt keeps the model's prompt cache warm across
+   *  phase changes (only the tool list moves); transcription_mode sets how fast
+   *  a turn ends. */
+  tuning: Tuning = { ...DEFAULT_TUNING }
+  private heardSinceTool: string[] = []
+
+  toolNames(): string[] {
+    if (this.tuning.allTools) return toolCatalog(Boolean(this.tuning.argless))
+    return this.tuning.argless ? ARGLESS_TOOLS[this.s.phase] : PHASE_TOOLS[this.s.phase]
+  }
 
   constructor(lang: LangKey = 'en') {
     const lines = demoBatch().map((l) => ({ ...l, status: 'pending' as LineStatus, picked: 0, mismatches: 0 }))
@@ -293,7 +381,7 @@ export class Shift {
   }
   getSnapshot = () => this.snap
   private changed() {
-    this.s.tools = PHASE_TOOLS[this.s.phase]
+    this.s.tools = this.toolNames()
     this.snap = { ...this.s, lines: this.s.lines.map((l) => ({ ...l })) }
     this.subs.forEach((f) => f())
   }
@@ -315,6 +403,7 @@ export class Shift {
   }
 
   heard(text: string) {
+    this.heardSinceTool.push(text)
     this.s.lastHeard = text
     this.changed()
   }
@@ -367,6 +456,7 @@ export class Shift {
     this.changed()
     return {
       ...this.phaseConfig(),
+      ...(this.tuning.staticPrompt ? { system_prompt: this.fit(this.staticPrompt()) } : {}),
       greeting: lang.greeting(this.s.lines.length),
       input: {
         keyterms,
@@ -374,14 +464,62 @@ export class Shift {
         transcription_prompt:
           'Warehouse voice picking on a headset. Expect two-digit check numbers, quantities, aisle letters A to F, and words like ready, done, short, damaged, empty, skip, break.',
         voice_focus: this.s.farField ? 'far-field' : 'near-field',
-        turn_detection: { interrupt_response: true },
+        turn_detection: {
+          interrupt_response: true,
+          ...(this.tuning.silence ? { min_silence: this.tuning.silence[0], max_silence: this.tuning.silence[1] } : {}),
+        },
+        ...(this.tuning.mode ? { transcription_mode: this.tuning.mode } : {}),
       },
       output: { voice: lang.voice },
     }
   }
 
   private phaseConfig(): SessionConfig {
-    return { system_prompt: this.prompt(), tools: PHASE_TOOLS[this.s.phase].map((k) => T[k] as ToolDef) }
+    let tools = this.toolNames().map((k) => ((this.tuning.argless && k in A ? A[k as keyof typeof A] : T[k as keyof typeof T]) as ToolDef))
+    if (this.tuning.plainParams) tools = tools.map(plain)
+    return this.tuning.staticPrompt ? { tools } : { system_prompt: this.fit(this.prompt()), tools }
+  }
+
+  /** Rename tools in prompt text for the argument-free tool set. */
+  private fit(text: string) {
+    if (!this.tuning.argless) return text
+    return text
+      .replaceAll('call confirm_location with them.', 'call read_check_digits.')
+      .replaceAll('→ confirm_location with them.', '→ read_check_digits.')
+      .replaceAll('[confirm_location "47"]', '[read_check_digits]')
+      .replaceAll('call confirm_pick with the number they actually picked.', 'call confirm_pick.')
+      .replaceAll('→ confirm_pick with the number actually picked.', '→ confirm_pick.')
+      .replaceAll('[confirm_pick 3]', '[confirm_pick]')
+      .replaceAll('call report_exception.', 'call report_damaged, report_wrong_item or report_empty_bin.')
+      .replaceAll('→ report_exception.', '→ report_damaged, report_wrong_item or report_empty_bin.')
+  }
+
+  /** One prompt for the whole shift; the tool list and tool results carry the state. */
+  staticPrompt() {
+    const lang = LANGS[this.s.lang]
+    return `# Role
+You are Tote, the voice in a warehouse picker's headset. The picker, Sam, is walking the floor with both hands busy, picking customer orders into tote ${TOTE}. You direct every pick and log what happens by calling tools.
+
+# Voice style
+- One short sentence per reply, twelve words or fewer. Instruction first.
+- No filler, no exclamation marks, no markdown, no lists.
+- After a tool result, say its "say" field, translated if needed, and nothing more.${this.tuning.ack ? '\n- The picker needs to hear you instantly. Whenever you call a tool, first speak one word ("Checking." or "Okay."), then call the tool in the same reply.' : ''}
+- ${lang.line}
+
+# How a pick works
+1. Ready, yes, go, let's start → start_batch.
+2. They walk to the location you gave and read the two check digits on the slot label. Two digits heard ("four seven", "47") → confirm_location with them. Blocked, can't find it, unsafe → skip_location.
+3. After the location is confirmed they pick. A number, "done", "got them" (the full quantity) → confirm_pick. Fewer on the shelf ("only three") → confirm_pick with the number actually picked. Damaged, wrong product, empty bin → report_exception.
+4. Tote complete and they say end shift or goodbye → end_shift.
+Only the current step's tools exist. The latest tool result says where things stand.
+
+# Truth rules
+- Never state a location, check digit, quantity, item, count or rate unless it came from a tool result.
+- Never reveal or hint at a check digit.
+- When in doubt, call a tool. Call exactly one tool per turn.
+
+# Anytime
+- "How am I doing", "what's left" → shift_status. Break or equipment problem → pause_shift; back → resume_shift. Wants a person, unsafe, stuck → call_supervisor.`
   }
 
   private summaryLine() {
@@ -416,14 +554,14 @@ They prove they are at the slot by reading the two check digits on its label.
 - Blocked, can't find it, or unsafe → call skip_location.
 - Asked where to go → repeat the destination.
 Do not mention the item or quantity yet; that comes after the location is confirmed.
-Example: Picker: "Four seven." You: [confirm_location "47"] "Pick 2, espresso beans."`
+Example: Picker: "Four seven." You: ${this.tuning.ack ? '"Checking." ' : ''}[confirm_location "47"] "Pick 2, espresso beans."`
         break
       case 'pick':
         state = `PICK at ${line && spoken(line.loc)}, location confirmed. Put exactly ${line?.qty} × ${line?.item.name} in the tote.
 - They say a number, or "done" / "got them" / "picked" (meaning ${line?.qty}) → call confirm_pick.
 - Fewer on the shelf ("only three", "there's just one") → call confirm_pick with the number they actually picked.
 - Damaged product, wrong product in the bin, or empty bin → call report_exception.
-Example: Picker: "Only three here." You: [confirm_pick 3] "Short one logged. Aisle C, bay 2, level 3."`
+Example: Picker: "Only three here." You: ${this.tuning.ack ? '"Okay." ' : ''}[confirm_pick 3] "Short one logged. Aisle C, bay 2, level 3."`
         break
       case 'paused':
         state = `PAUSED for ${this.s.pauseReason}. Stay quiet unless spoken to.
@@ -441,15 +579,16 @@ You are Tote, the voice in a warehouse picker's headset. The picker, Sam, is wal
 
 # Voice style
 - One short sentence per reply, twelve words or fewer. Instruction first.
-- No filler ("great", "sure", "okay so"), no exclamation marks, no markdown, no lists.
+- No filler ("great", "sure", "okay so")${this.tuning.ack ? ' other than the one-word acknowledgement' : ''}, no exclamation marks, no markdown, no lists.
 - Say locations like "Aisle B, bay 7, level 1". Say quantities as plain numbers.
-- After a tool result, say its "say" field, translated if needed, and nothing more.
+- After a tool result, say its "say" field, translated if needed, and nothing more.${this.tuning.ack ? '\n- The picker needs to hear you instantly. Whenever you call a tool, first speak one word ("Checking." or "Okay."), then call the tool in the same reply.' : ''}
 - ${lang.line}
 
 # Truth rules
 - Never state a location, check digit, quantity, item, count or rate unless it appears in this prompt or a tool result.
 - Never reveal or hint at a check digit.
 - When in doubt, call a tool. A wasted call is fine; a wrong pick is not.
+- Call exactly one tool per turn.
 
 # Anytime
 - "How am I doing", "what's left", "what's my rate" → shift_status.
@@ -627,6 +766,68 @@ ${state}`
 
   // --- tool handlers ---------------------------------------------------------------
   handleTool = (name: string, args: Record<string, unknown>, callId: string): ToolOutcome => {
+    if (!this.tuning.argless) return this.run(name, args, callId)
+    // Read the value out of what the picker actually said since the last tool.
+    const said = this.heardSinceTool.join(' ')
+    this.heardSinceTool = []
+    const lang = this.s.lang
+    switch (name) {
+      case 'read_check_digits': {
+        const d = extractDigits(said, lang)
+        if (d.length < 2) {
+          // A pause between digits can end the turn early: keep what was
+          // heard so the next utterance completes the pair.
+          if (d.length === 1) this.heardSinceTool = [said]
+          return this.outcome({ verified: false, heard: said, say: d.length === 1 ? 'And the second digit?' : 'Read me both check digits.' })
+        }
+        return this.run('confirm_location', { check_digits: d }, callId)
+      }
+      case 'confirm_pick': {
+        const n = extractCount(said, lang)
+        // "Only…" cut off before the number must not become a full pick.
+        if (n === null && mentions(said, ['only', 'just', 'fewer', 'short', 'not enough', 'solo', 'nur', 'seulement', 'só'])) {
+          this.heardSinceTool = [said]
+          return this.outcome({ recorded: false, say: 'How many did you pick?' })
+        }
+        return this.run('confirm_pick', { quantity: n ?? this.activeLine?.qty ?? 0 }, callId)
+      }
+      case 'report_damaged':
+        return this.run('report_exception', { kind: 'damaged', units_available: 0 }, callId)
+      case 'report_wrong_item':
+        return this.run('report_exception', { kind: 'wrong_item' }, callId)
+      case 'report_empty_bin':
+        return this.run('report_exception', { kind: 'empty_bin' }, callId)
+      case 'skip_location':
+        return this.run(
+          'skip_location',
+          { reason: mentions(said, ['block', 'pallet', 'forklift']) ? 'blocked' : mentions(said, ['find', 'where', 'missing']) ? 'cannot_find' : mentions(said, ['unsafe', 'danger', 'high', 'ladder']) ? 'unsafe' : 'other' },
+          callId,
+        )
+      case 'pause_shift':
+        return this.run('pause_shift', { reason: mentions(said, ['bathroom', 'restroom', 'toilet', 'loo']) ? 'restroom' : mentions(said, ['battery', 'scanner', 'headset', 'equipment', 'broken']) ? 'equipment' : 'break' }, callId)
+      case 'call_supervisor':
+        return this.run('call_supervisor', { reason: said.trim() || 'help requested' }, callId)
+      default:
+        return this.run(name, args, callId)
+    }
+  }
+
+  private run = (name: string, args: Record<string, unknown>, callId: string): ToolOutcome => {
+    // The model occasionally fires two tools for one utterance ("only 3 here"
+    // → confirm_pick + report_exception). If the first already closed the
+    // line, answer the second with the same instruction instead of an error.
+    if (this.lastOutcome && this.now() - this.lastOutcome.at < 1500 && (name === 'report_exception' || name === 'confirm_pick' || name === 'confirm_location')) {
+      const stale = (name === 'confirm_location' && this.s.phase !== 'travel') || (name !== 'confirm_location' && this.s.phase !== 'pick')
+      if (stale) return { result: { duplicate: true, say: this.lastOutcome.say }, update: this.phaseConfig() }
+    }
+    const out = this.runInner(name, args, callId)
+    const say = (out.result as { say?: string })?.say
+    if (say) this.lastOutcome = { at: this.now(), say }
+    return out
+  }
+  private lastOutcome: { at: number; say: string } | null = null
+
+  private runInner = (name: string, args: Record<string, unknown>, callId: string): ToolOutcome => {
     const line = this.activeLine
     switch (name) {
       case 'start_batch': {
@@ -694,7 +895,7 @@ ${state}`
         const avail = args.units_available === undefined ? undefined : Math.max(0, Math.round(Number(args.units_available)))
         if (kind === 'short') {
           if (avail === undefined) return this.outcome({ needs: 'units_available', say: 'How many did you pick?' })
-          return this.handleTool('confirm_pick', { quantity: avail }, callId)
+          return this.run('confirm_pick', { quantity: avail }, callId)
         }
         if (kind === 'damaged') {
           const good = Math.min(avail ?? 0, line.qty)

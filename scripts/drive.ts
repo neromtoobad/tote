@@ -41,7 +41,7 @@ const DIGIT_WORDS: Record<LangKey, string[]> = {
   pt: ['zero', 'um', 'dois', 'três', 'quatro', 'cinco', 'seis', 'sete', 'oito', 'nove'],
 }
 const PHRASES: Record<LangKey, Record<string, string>> = {
-  en: { ready: 'Ready.', got: 'Got them.', got1: 'Got it.', last: 'Done.', short: 'Only {n} here.', damaged: "Hmm, this one's damaged.", status: 'How am I doing?', end: "That's it. End my shift.", brk: 'I need a quick break.', back: "Okay, I'm back." },
+  en: { ready: 'Ready.', got: 'Got them.', got1: 'Got it.', last: 'Done.', short: 'Only three here.', damaged: "Hmm, this one's damaged.", status: 'How am I doing?', end: "That's it. End my shift.", brk: 'I need a quick break.', back: "Okay, I'm back." },
   es: { ready: 'Listo.', got: 'Ya los tengo.', short: 'Solo hay {n}.', damaged: 'Este está dañado.', status: '¿Cómo voy?', end: 'Terminar turno.' },
   de: { ready: 'Bereit.', got: 'Hab sie.', short: 'Nur {n} da.', damaged: 'Der ist beschädigt.', status: 'Wie stehe ich?', end: 'Schicht beenden.' },
   fr: { ready: 'Prêt.', got: "C'est bon.", short: 'Seulement {n}.', damaged: 'Celui-ci est abîmé.', status: 'Où j’en suis ?', end: 'Fin de poste.' },
@@ -70,7 +70,7 @@ let t0 = Date.now()
 // The tape: every server message with its arrival time, plus both audio tracks,
 // so scripts/replay can re-render this exact session frame by frame.
 const TAPE_DIR = process.env.TAPE ? path.join(ROOT, 'video', 'tapes', process.env.TAPE) : null
-const tape: { lang: LangKey; events: Record<string, unknown>[]; report?: unknown; session?: string | null } = { lang: LANG, events: [] }
+const tape: { lang: LangKey; events: Record<string, unknown>[]; report?: unknown; session?: string | null; tuning?: unknown } = { lang: LANG, events: [] }
 const agentPcm: Buffer[] = []
 const samPcm: Buffer[] = []
 let agentBytes = 0
@@ -79,12 +79,32 @@ const ts = () => `${((Date.now() - t0) / 1000).toFixed(1).padStart(5)}s`
 const out = (who: string, text: string) => console.log(`${ts()}  ${who.padEnd(6)} ${text}`)
 
 const shift = new Shift(LANG)
+const env = process.env
+shift.tuning = {
+  ...(env.LEGACY === '1' ? {} : shift.tuning),
+  ...(env.STATIC ? { staticPrompt: env.STATIC === '1' } : {}),
+  ...(env.TMODE ? { mode: env.TMODE as 'min_latency' } : {}),
+  ...(env.PLAIN ? { plainParams: env.PLAIN === '1' } : {}),
+  ...(env.ACK ? { ack: env.ACK === '1' } : {}),
+  ...(env.ARGLESS ? { argless: env.ARGLESS === '1' } : {}),
+  ...(env.ALLTOOLS ? { allTools: env.ALLTOOLS === '1' } : {}),
+  ...(env.SILENCE ? { silence: env.SILENCE.split(',').map(Number) as [number, number] } : {}),
+}
+// NOUPDATE=1: never send a mid-session session.update (no progressive reveal).
+if (process.env.NOUPDATE === '1') {
+  const h = shift.handleTool
+  shift.handleTool = (n, a, c) => {
+    const o = h(n, a, c)
+    delete o.update
+    return o
+  }
+}
 const agent = new VoiceAgent(shift.handleTool, (b64) => {
   const b = Buffer.from(b64, 'base64')
   return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)
 })
 shift.port = {
-  update: (c, d) => agent.update(c, d),
+  update: (c, d) => (process.env.NOUPDATE === '1' ? undefined : agent.update(c, d)),
   say: (i, c) => agent.say(i, c),
   resolveHold: (id, n, o) => agent.resolveHold(id, n, o),
   end: () => agent.end(),
@@ -263,6 +283,7 @@ async function saveTape(s: ReturnType<typeof shift.getSnapshot>) {
   if (!TAPE_DIR) return
   fs.mkdirSync(TAPE_DIR, { recursive: true })
   tape.session = agent.sessionId
+  tape.tuning = shift.tuning
   try {
     const res = await fetch(process.env.REPORT_URL ?? 'http://localhost:8787/api/report', {
       method: 'POST',
@@ -301,5 +322,32 @@ url.searchParams.set('max_session_duration_seconds', '600')
 const res = await fetch(url, { headers: { Authorization: `Bearer ${KEY}` } })
 if (!res.ok) throw new Error(`token ${res.status} ${await res.text()}`)
 const { token } = (await res.json()) as { token: string }
+// LLM=<gateway model> publishes the same config as a stored agent that runs on
+// that model through the LLM Gateway, binds by agent_id, then drives phases
+// with session.update exactly as the inline path does.
+const LLM = process.env.LLM
+let first: Record<string, unknown> = shift.initialConfig()
+if (LLM) {
+  const cfg = first as ReturnType<typeof shift.initialConfig>
+  const body = {
+    name: `tote-${LANG}-${LLM}`,
+    system_prompt: cfg.system_prompt,
+    greeting: cfg.greeting,
+    voice: { voice_id: (cfg.output as { voice: string }).voice },
+    tools: (cfg.tools ?? []).map(({ type: _t, ...rest }) => rest),
+    input: cfg.input,
+    llm: [{ base_url: 'https://llm-gateway.assemblyai.com/v1', model: LLM, api_key: KEY }],
+  }
+  const res = await fetch('https://agents.assemblyai.com/v1/agents', {
+    method: 'POST',
+    headers: { Authorization: KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const txt = await res.text()
+  if (!res.ok) throw new Error(`create agent ${res.status} ${txt}`)
+  const created = JSON.parse(txt) as { id: string }
+  out('AGENT', `${created.id} on ${LLM}`)
+  first = { agent_id: created.id }
+}
 t0 = Date.now()
-agent.connect(token, shift.initialConfig())
+agent.connect(token, first)
