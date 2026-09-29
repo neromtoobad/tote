@@ -33,7 +33,11 @@ export default function App() {
   const [shift, setShift] = useState(() => new Shift('en'))
   const s = useSyncExternalStore(shift.subscribe, shift.getSnapshot)
   if (import.meta.env.DEV) (window as unknown as { __shift: Shift }).__shift = shift
-  const [status, setStatus] = useState<AgentStatus>('idle')
+  const [agentStatus, setStatus] = useState<AgentStatus>('idle')
+  // The server finishes a reply before the speaker does; keep showing
+  // "speaking" until the playback buffer has actually drained.
+  const [speakerBusy, setSpeakerBusy] = useState(false)
+  const status: AgentStatus = agentStatus === 'listening' && speakerBusy ? 'speaking' : agentStatus
   const [detail, setDetail] = useState<string>()
   const [captions, setCaptions] = useState<Caption[]>([])
   const [wire, setWire] = useState<WireEvent[]>([])
@@ -192,7 +196,10 @@ export default function App() {
       if (!res.ok) throw new Error(tok.error ?? 'could not get a session token')
 
       const agent = bind(sh)
-      audio.onSpeaker(({ level }) => (speakerLevel.current = level))
+      audio.onSpeaker(({ level, idle }) => {
+        speakerLevel.current = level
+        setSpeakerBusy(!idle)
+      })
       audio.onChunk(batcher(1200, (pcm) => agent.sendAudio(toBase64(pcm))))
       agent.connect(tok.token, sh.initialConfig())
     } catch (e) {

@@ -183,7 +183,7 @@ export function Headset({
           Tools the agent can call right now <b className="mono">({s.phase})</b>
         </span>
         {toolCatalog(true).map((t) => (
-          <span key={t} className={`tool${s.tools.includes(t) ? ' on' : ''}${t === 'call_supervisor' ? ' hold' : ''}`}>
+          <span key={t} className={`tchip${s.tools.includes(t) ? ' on' : ''}${t === 'call_supervisor' ? ' hold' : ''}`}>
             {t}
           </span>
         ))}

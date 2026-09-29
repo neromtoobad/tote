@@ -564,7 +564,7 @@ select {
 .cap-line.partial {
   opacity: 0.6;
 }
-.cap-line.tool {
+.cap-line.tchip {
   font-family: var(--mono);
   font-size: 11.5px;
   color: var(--muted);
@@ -624,7 +624,7 @@ select {
   color: var(--faint);
   width: 100%;
 }
-.tool {
+.tchip {
   font-family: var(--mono);
   font-size: 11px;
   padding: 2px 7px;
@@ -635,13 +635,13 @@ select {
   text-decoration: line-through;
   text-decoration-color: rgba(0, 0, 0, 0.18);
 }
-.tool.on {
+.tchip.on {
   color: var(--ink);
   background: var(--info-tint);
   border-color: #c9d5f5;
   text-decoration: none;
 }
-.tool.hold::after {
+.tchip.hold::after {
   content: ' · hold';
   color: var(--warn);
 }
