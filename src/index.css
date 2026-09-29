@@ -327,4 +327,7 @@ table.audit td { border-bottom: 1px solid var(--border); padding: 6px; }
   .brand-sub, .whoami .vsep, .whoami .vsep + div { display: none; }
   .intro-card { grid-template-columns: 1fr; }
   .intro-art { display: none; }
+  .intro { position: static; padding: 0 10px 10px; background: none; backdrop-filter: none; }
+  .intro-card { box-shadow: var(--shadow); }
+  .stage { display: none; }
 }
