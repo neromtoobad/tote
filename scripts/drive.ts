@@ -41,7 +41,7 @@ const DIGIT_WORDS: Record<LangKey, string[]> = {
   pt: ['zero', 'um', 'dois', 'três', 'quatro', 'cinco', 'seis', 'sete', 'oito', 'nove'],
 }
 const PHRASES: Record<LangKey, Record<string, string>> = {
-  en: { ready: 'Ready.', got: 'Got them.', short: 'Only {n} here.', damaged: "This one's damaged.", status: 'How am I doing?', end: "That's it, end my shift." },
+  en: { ready: 'Ready.', got: 'Got them.', got1: 'Got it.', last: 'Done.', short: 'Only {n} here.', damaged: "Hmm, this one's damaged.", status: 'How am I doing?', end: "That's it. End my shift.", brk: 'I need a quick break.', back: "Okay, I'm back." },
   es: { ready: 'Listo.', got: 'Ya los tengo.', short: 'Solo hay {n}.', damaged: 'Este está dañado.', status: '¿Cómo voy?', end: 'Terminar turno.' },
   de: { ready: 'Bereit.', got: 'Hab sie.', short: 'Nur {n} da.', damaged: 'Der ist beschädigt.', status: 'Wie stehe ich?', end: 'Schicht beenden.' },
   fr: { ready: 'Prêt.', got: "C'est bon.", short: 'Seulement {n}.', damaged: 'Celui-ci est abîmé.', status: 'Où j’en suis ?', end: 'Fin de poste.' },
@@ -50,7 +50,15 @@ const PHRASES: Record<LangKey, Record<string, string>> = {
 }
 const VOICE: Record<LangKey, string> = { en: 'Samantha', es: 'Paulina', de: 'Anna', fr: 'Thomas', it: 'Alice', pt: 'Joana' }
 
+// Pre-voiced lines (video/voice/lines.json) win over macOS `say` when present.
+const VOICE_DIR = path.join(ROOT, 'video', 'voice')
+const VOICED: Record<string, string> = LANG === 'en' && fs.existsSync(path.join(VOICE_DIR, 'lines.json')) ? JSON.parse(fs.readFileSync(path.join(VOICE_DIR, 'lines.json'), 'utf8')) : {}
+
 function tts(text: string): Buffer {
+  if (VOICED[text]) {
+    // A beat of lead-in so the utterance doesn't start on the first sample.
+    return Buffer.concat([Buffer.alloc(2400), fs.readFileSync(path.join(VOICE_DIR, VOICED[text])), Buffer.alloc(2400)])
+  }
   const aiff = path.join(TMP, 'u.aiff')
   const raw = path.join(TMP, 'u.raw')
   execFileSync('say', ['-v', VOICE[LANG], '-o', aiff, text])
@@ -110,11 +118,15 @@ function speak(text: string) {
 let replyStart = 0
 let replyAudioMs = 0
 let respondTimer: ReturnType<typeof setTimeout> | null = null
-let lastPhaseKey = ''
 let askedStatus = false
 let wrongDone = !WRONG
 const P = PHRASES[LANG]
-const digitsSpoken = (d: string) => d.split('').map((c) => DIGIT_WORDS[LANG][Number(c)]).join(' ')
+const digitsSpoken = (d: string) => {
+  const w = d.split('').map((c) => DIGIT_WORDS[LANG][Number(c)]).join(' ')
+  return `${w[0].toUpperCase()}${w.slice(1)}.`
+}
+const BREAK = process.env.BREAK === '1'
+let breakDone = !BREAK
 
 function nextUtterance(): string | null {
   const s = shift.getSnapshot()
@@ -124,11 +136,12 @@ function nextUtterance(): string | null {
       return P.ready
     case 'travel': {
       if (!line || !s.arrivedAt) return null
-      let d = checkDigits(line.loc)
+      const d = checkDigits(line.loc)
       if (!wrongDone && line.id === 'L3') {
         wrongDone = true
-        d = String((Number(d) + 11) % 90 + 10)
+        return digitsSpoken(String(Number(d) + 10).slice(-2)) // misread the first digit
       }
+      if (line.mismatches > 0 && LANG === 'en') return `Oh, sorry. ${digitsSpoken(d)}`
       return digitsSpoken(d)
     }
     case 'pick': {
@@ -140,8 +153,16 @@ function nextUtterance(): string | null {
         askedStatus = true
         return P.status
       }
-      return P.got
+      if (!breakDone && line.id === 'L5') {
+        breakDone = true
+        return P.brk ?? P.got
+      }
+      const pending = s.lines.filter((l) => l.status === 'pending').length
+      if (!pending && P.last) return P.last
+      return line.qty === 1 && P.got1 ? P.got1 : P.got
     }
+    case 'paused':
+      return P.back ?? P.ready
     case 'complete':
       return P.end
     default:
@@ -149,20 +170,37 @@ function nextUtterance(): string | null {
   }
 }
 
+// Sam answers once per finished agent turn, and never while a tool result is
+// still owed (the agent may speak a filler before the real answer).
+let agentTurns = 0
+let answeredTurn = -1
+let owedTools = 0
+let resultSent = false
+agent.on('toolCall', () => {
+  owedTools++
+  resultSent = false
+})
+agent.on('toolResult', () => (resultSent = true))
+agent.on('agent', () => {
+  agentTurns++
+  if (resultSent) {
+    owedTools = 0
+    resultSent = false
+  }
+})
+
 function scheduleResponse() {
   if (respondTimer) clearTimeout(respondTimer)
-  const wait = Math.max(0, replyStart + replyAudioMs - Date.now()) + 700
+  const wait = Math.max(0, replyStart + replyAudioMs - Date.now()) + 750
   respondTimer = setTimeout(function tryRespond() {
-    if (agent.status !== 'listening' || speech) return
-    const s = shift.getSnapshot()
-    const key = `${s.phase}:${s.active}:${s.arrivedAt}:${s.lines[s.active]?.mismatches}:${s.log.length}`
+    if (agent.status !== 'listening' || speech || owedTools > 0) return
+    if (answeredTurn === agentTurns) return
     const u = nextUtterance()
     if (!u) {
-      respondTimer = setTimeout(tryRespond, 500) // e.g. still walking
+      respondTimer = setTimeout(tryRespond, 400) // e.g. still walking to the slot
       return
     }
-    if (key === lastPhaseKey && s.phase !== 'travel') return // nothing changed; wait for the agent
-    lastPhaseKey = key
+    answeredTurn = agentTurns
     speak(u)
   }, wait)
 }

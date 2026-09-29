@@ -33,3 +33,6 @@ art/*.raw
 art/*.bin
 art/*.json
 art/*.jpg
+video/voice/*.mp3
+video/tapes/
+video/out/
