@@ -1,0 +1,32 @@
+{
+  "name": "tote",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "server": "node server/index.ts",
+    "build": "tsc -b && vite build",
+    "start": "node server/index.ts",
+    "lint": "oxlint",
+    "drive": "node scripts/drive.ts"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "oxlint": "^1.81.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.0"
+  },
+  "description": "Tote: a hands-free voice picking copilot for warehouses, built on the AssemblyAI Voice Agent API",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.18"
+  }
+}
